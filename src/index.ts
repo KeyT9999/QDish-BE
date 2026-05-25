@@ -6,6 +6,8 @@ import { createServer } from "http";
 import { connectDB } from "./config/db.js";
 import restaurantRoutes from "./routes/restaurantRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
+import ownerRoutes from "./routes/ownerRoutes.js";
+import ownerRestaurantRoutes from "./routes/ownerRestaurantRoutes.js";
 import tableRoutes from "./routes/tableRoutes.js";
 import menuRoutes from "./routes/menuRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
@@ -26,6 +28,8 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/owners", ownerRoutes);
+app.use("/api/owner/restaurants", ownerRestaurantRoutes);
 app.use("/api/restaurants", restaurantRoutes);
 app.use("/api/tables", tableRoutes);
 app.use("/api/menu", menuRoutes);
@@ -41,4 +45,3 @@ connectDB().then(() => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
   });
 });
-

@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum RestaurantStatus {
   ACTIVE = "ACTIVE",
@@ -16,6 +16,7 @@ export interface IRestaurant extends Document {
   active: boolean;
   bankAccount?: string; // Số tài khoản ngân hàng
   bankName?: string; // Tên ngân hàng
+  ownerId?: Types.ObjectId; // ID chủ nhà hàng
 }
 
 const RestaurantSchema = new Schema<IRestaurant>(
@@ -68,6 +69,11 @@ const RestaurantSchema = new Schema<IRestaurant>(
     bankName: {
       type: String,
       trim: true
+    },
+    ownerId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      index: true
     }
   },
   { timestamps: true }

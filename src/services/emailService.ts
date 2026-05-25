@@ -378,3 +378,56 @@ export const sendBankAccountChangeOTP = async ({
   });
 };
 
+export interface OwnerRegisterMailParams {
+  to: string;
+  fullName: string;
+  otp: string;
+}
+
+export const sendOwnerRegisterOTP = async ({
+  to,
+  fullName,
+  otp
+}: OwnerRegisterMailParams) => {
+  if (!SMTP_HOST) {
+    throw new Error("SMTP_HOST chưa được cấu hình");
+  }
+
+  const from = MAIL_FROM || SMTP_USER || "no-reply@example.com";
+
+  const text = [
+    `Xin chào Anh/chị ${fullName},`,
+    "",
+    "Cảm ơn Anh/chị đã quan tâm và đăng ký tài khoản Chủ nhà hàng trên hệ thống QDish.",
+    "Dưới đây là mã xác thực OTP của Anh/chị:",
+    `Mã OTP: ${otp}`,
+    "",
+    "Lưu ý: Mã OTP này chỉ có hiệu lực trong 5 phút.",
+    "",
+    "Nếu Anh/chị không thực hiện yêu cầu này, vui lòng bỏ qua email này."
+  ].join("\n");
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+      <h2 style="color: #10b981; margin-top: 0; font-size: 22px;">Chào mừng Anh/chị ${fullName} đến với QDish!</h2>
+      <p>Cảm ơn Anh/chị đã đăng ký tài khoản Chủ nhà hàng trên hệ thống quản lý gọi món <strong>QDish</strong>.</p>
+      <p>Để hoàn tất quá trình đăng ký, vui lòng sử dụng mã xác thực OTP dưới đây:</p>
+      <div style="background-color: #f0fdf4; border: 1px dashed #10b981; border-radius: 8px; padding: 16px; text-align: center; margin: 20px 0;">
+        <span style="font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #047857;">${otp}</span>
+      </div>
+      <p style="color: #6b7280; font-size: 13px; font-style: italic;">Mã OTP này chỉ có hiệu lực trong <strong>5 phút</strong> và chỉ sử dụng một lần duy nhất.</p>
+      <hr style="border: 0; border-top: 1px solid #f3f4f6; margin: 20px 0;" />
+      <p style="color: #9ca3af; font-size: 12px; margin-bottom: 0;">Nếu Anh/chị không thực hiện yêu cầu đăng ký này, vui lòng bỏ qua email này. Tài khoản sẽ không được khởi tạo nếu không được xác minh OTP.</p>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from,
+    to,
+    subject: `[QDish] Mã xác thực OTP đăng ký Chủ nhà hàng`,
+    text,
+    html
+  });
+};
+
+
