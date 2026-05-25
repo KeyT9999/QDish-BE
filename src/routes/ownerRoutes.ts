@@ -109,14 +109,38 @@ router.get("/", async (req, res) => {
 
     // Query owned restaurants count and names for each owner
     const { Restaurant } = await import("../models/Restaurant.js");
+    const { getOwnerSubscription } = await import("../services/subscriptionService.js");
+    const { Plan } = await import("../models/Plan.js");
+
     const ownersWithRestaurants = await Promise.all(
       owners.map(async (owner) => {
         const ownedBranches = await Restaurant.find({ ownerId: owner._id }).select("name");
+        
+        let planName = "N/A";
+        let planCode = "N/A";
+        let subscriptionStatus = "N/A";
+        let subscriptionExpiresAt = null;
+
+        try {
+          const sub = await getOwnerSubscription(owner._id);
+          const plan = await Plan.findById(sub.planId);
+          planName = plan ? plan.name : "FREE";
+          planCode = sub.planCode;
+          subscriptionStatus = sub.status;
+          subscriptionExpiresAt = sub.expiresAt || null;
+        } catch (subErr) {
+          console.error(`Lỗi khi lấy subscription cho owner ${owner._id}:`, subErr);
+        }
+
         return {
           ...owner,
           id: owner._id.toString(),
           restaurantsCount: ownedBranches.length,
-          restaurants: ownedBranches.map(r => r.name)
+          restaurants: ownedBranches.map(r => r.name),
+          planName,
+          planCode,
+          subscriptionStatus,
+          subscriptionExpiresAt
         };
       })
     );

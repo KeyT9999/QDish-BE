@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User, UserRole } from "../models/User.js";
-import { Order, OrderStatus, PaymentMethod } from "../models/Order.js";
+import { Order, OrderStatus } from "../models/Order.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import mongoose from "mongoose";
 import { emitOrderUpdated } from "../realtime/socket.js";
@@ -21,6 +21,7 @@ router.get("/", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN] as string[]
     .select("_id username role isActive name updatedBy")
     .populate("updatedBy", "username")
     .lean();
+
   res.json(staffList.map(s => ({
     id: s._id,
     username: s.username,
@@ -50,6 +51,26 @@ router.post("/", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN] as string[
 
   if (!adminId) {
     return res.status(403).json({ message: "Không xác định được admin" });
+  }
+
+  // Kiểm tra giới hạn số lượng nhân viên (STAFF) của gói dịch vụ
+  try {
+    const { resolveOwnerByRestaurant, checkPlanLimit } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(restaurantId);
+    if (ownerId) {
+      const limitError = await checkPlanLimit(ownerId, "STAFF_LIMIT");
+      if (limitError) {
+        return res.status(403).json({
+          message: limitError.message,
+          code: "PLAN_LIMIT_REACHED",
+          limitType: "STAFF_LIMIT",
+          currentPlan: limitError.currentPlan,
+          upgradeRequired: true
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Lỗi khi kiểm tra giới hạn nhân viên:", err);
   }
 
   const existingUser = await User.findOne({ username });
@@ -299,4 +320,3 @@ router.patch("/:id", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN] as str
 });
 
 export default router;
-

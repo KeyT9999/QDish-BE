@@ -15,6 +15,19 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
       return res.status(403).json({ message: "Không xác định được thông tin chủ sở hữu" });
     }
 
+    // Kiểm tra giới hạn số lượng nhà hàng theo gói
+    const { checkPlanLimit } = await import("../services/subscriptionService.js");
+    const limitError = await checkPlanLimit(ownerId, "RESTAURANT_LIMIT");
+    if (limitError) {
+      return res.status(403).json({
+        message: limitError.message,
+        code: "PLAN_LIMIT_REACHED",
+        limitType: "RESTAURANT_LIMIT",
+        currentPlan: limitError.currentPlan,
+        upgradeRequired: true
+      });
+    }
+
     const {
       restaurantName,
       restaurantEmail,

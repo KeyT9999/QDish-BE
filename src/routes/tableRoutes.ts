@@ -44,6 +44,24 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       return res.status(404).json({ message: "Nhà hàng không tồn tại" });
     }
 
+    // Kiểm tra giới hạn số bàn ăn của gói dịch vụ
+    const existingTable = await Table.findOne({ restaurantId: authRestaurantId, code });
+    if (!existingTable) {
+      if (restaurant.ownerId) {
+        const { checkPlanLimit } = await import("../services/subscriptionService.js");
+        const limitError = await checkPlanLimit(restaurant.ownerId, "TABLE_LIMIT");
+        if (limitError) {
+          return res.status(403).json({
+            message: limitError.message,
+            code: "PLAN_LIMIT_REACHED",
+            limitType: "TABLE_LIMIT",
+            currentPlan: limitError.currentPlan,
+            upgradeRequired: true
+          });
+        }
+      }
+    }
+
     const table = await Table.findOneAndUpdate(
       { restaurantId: authRestaurantId, code },
       { restaurantId: authRestaurantId, code, isActive: true },
@@ -59,5 +77,3 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 });
 
 export default router;
-
-

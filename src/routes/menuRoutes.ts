@@ -45,6 +45,26 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       .json({ message: "Chỉ admin nhà hàng mới được thêm món" });
   }
 
+  // Kiểm tra giới hạn số lượng món ăn của gói dịch vụ
+  try {
+    const { resolveOwnerByRestaurant, checkPlanLimit } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(restaurantId);
+    if (ownerId) {
+      const limitError = await checkPlanLimit(ownerId, "MENU_ITEM_LIMIT");
+      if (limitError) {
+        return res.status(403).json({
+          message: limitError.message,
+          code: "PLAN_LIMIT_REACHED",
+          limitType: "MENU_ITEM_LIMIT",
+          currentPlan: limitError.currentPlan,
+          upgradeRequired: true
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Lỗi khi kiểm tra giới hạn món ăn:", err);
+  }
+
   const { 
     name, description, price, category, categoryId, imageUrl, available,
     calories, protein, carbs, fat, fiber, sugar, sodium, nutritionScore,
@@ -152,5 +172,3 @@ router.delete("/:id", requireAuth, async (req: AuthRequest, res) => {
 });
 
 export default router;
-
-

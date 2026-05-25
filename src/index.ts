@@ -14,6 +14,8 @@ import categoryRoutes from "./routes/categoryRoutes.js";
 import staffRoutes from "./routes/staffRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import subscriptionRoutes from "./routes/subscriptionRoutes.js";
+import adminSubscriptionRoutes from "./routes/adminSubscriptionRoutes.js";
 import { initRealtime } from "./realtime/socket.js";
 
 const app = express();
@@ -37,6 +39,8 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api", subscriptionRoutes);
+app.use("/api/admin", adminSubscriptionRoutes);
 
 connectDB().then(() => {
   initRealtime(httpServer);

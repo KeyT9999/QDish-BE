@@ -196,6 +196,15 @@ router.post("/register-owner/verify-otp", async (req, res) => {
       isActive: true
     });
 
+    // Tự động gán gói FREE ACTIVE
+    try {
+      const { getOwnerSubscription } = await import("../services/subscriptionService.js");
+      await getOwnerSubscription(newOwner._id);
+      console.log(`Auto-assigned FREE subscription to newly registered owner: ${newOwner.username}`);
+    } catch (subError) {
+      console.error("Lỗi khi tự động gán gói FREE cho chủ nhà hàng mới:", subError);
+    }
+
     // Đánh dấu token đã dùng
     tokenDoc.used = true;
     await tokenDoc.save();
