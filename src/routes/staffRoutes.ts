@@ -5,6 +5,8 @@ import { Order, OrderStatus } from "../models/Order.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import mongoose from "mongoose";
 import { emitOrderUpdated } from "../realtime/socket.js";
+import { createSystemNotification } from "../services/notificationService.js";
+import { NotificationType, NotificationPriority } from "../models/Notification.js";
 
 const router = Router();
 
@@ -202,6 +204,39 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
   }
 
   emitOrderUpdated(restaurantId, order.toJSON());
+
+  // Auto notification: order status updated
+  try {
+    const restaurantStaff = await User.find({
+      restaurantId: new mongoose.Types.ObjectId(restaurantId),
+      role: { $in: [UserRole.RESTAURANT_ADMIN, UserRole.STAFF] },
+      isActive: true
+    }).select("_id");
+
+    const recipientUserIds = restaurantStaff.map(s => s._id);
+
+    // Resolve owner
+    const { resolveOwnerByRestaurant } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(restaurantId);
+    if (ownerId && !recipientUserIds.some(id => id.toString() === ownerId.toString())) {
+      recipientUserIds.push(ownerId);
+    }
+
+    if (recipientUserIds.length > 0) {
+      await createSystemNotification({
+        title: "Đơn hàng cập nhật",
+        message: `Đơn hàng bàn ${order.tableNumber} đã chuyển sang trạng thái [${status}] bởi ${updatedByName}`,
+        type: NotificationType.ORDER,
+        priority: NotificationPriority.NORMAL,
+        recipientUserIds,
+        restaurantId,
+        orderId: order._id.toString(),
+        actionUrl: `/dashboard?tab=orders`
+      });
+    }
+  } catch (notifError) {
+    console.error("Không thể gửi notification cập nhật đơn hàng", notifError);
+  }
 
   res.json(order);
 });

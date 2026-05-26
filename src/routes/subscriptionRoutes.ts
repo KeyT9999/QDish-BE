@@ -12,6 +12,8 @@ import {
   getOwnerUsage,
   checkPlanLimit
 } from "../services/subscriptionService.js";
+import { createSystemNotification } from "../services/notificationService.js";
+import { NotificationType, NotificationPriority } from "../models/Notification.js";
 
 const router = Router();
 
@@ -413,6 +415,22 @@ router.post("/payments/payos-webhook", async (req, res) => {
       const paidSub = await activatePaidSubscription(transaction, webhookData);
       if (paidSub) {
         console.log(`Activated plan ${paidSub.planCode} for ownerId ${paidSub.ownerId}`);
+        // Auto notification: payment success
+        try {
+          await createSystemNotification({
+            title: "Thanh to\u00e1n th\u00e0nh c\u00f4ng",
+            message: `G\u00f3i ${paidSub.planCode} \u0111\u00e3 \u0111\u01b0\u1ee3c k\u00edch ho\u1ea1t th\u00e0nh c\u00f4ng!`,
+            type: NotificationType.PAYMENT,
+            priority: NotificationPriority.NORMAL,
+            recipientUserIds: [paidSub.ownerId],
+            ownerId: paidSub.ownerId,
+            subscriptionId: paidSub._id as any,
+            paymentTransactionId: transaction._id as any,
+            actionUrl: "/owner?tab=billing"
+          });
+        } catch (notifErr) {
+          console.error("Kh\u00f4ng th\u1ec3 g\u1eedi notification thanh to\u00e1n th\u00e0nh c\u00f4ng", notifErr);
+        }
       }
       return res.json({ success: true });
     } else {
@@ -430,6 +448,23 @@ router.post("/payments/payos-webhook", async (req, res) => {
         await sub.save();
       }
       console.log(`❌ Cancelled transaction for orderCode ${orderCode}`);
+
+      // Auto notification: payment cancelled
+      try {
+        await createSystemNotification({
+          title: "Thanh to\u00e1n th\u1ea5t b\u1ea1i",
+          message: `Giao d\u1ecbch thanh to\u00e1n \u0111\u00e3 b\u1ecb h\u1ee7y. Vui l\u00f2ng th\u1eed l\u1ea1i.`,
+          type: NotificationType.PAYMENT,
+          priority: NotificationPriority.HIGH,
+          recipientUserIds: [transaction.ownerId],
+          ownerId: transaction.ownerId,
+          subscriptionId: transaction.subscriptionId,
+          paymentTransactionId: transaction._id as any,
+          actionUrl: "/owner?tab=billing"
+        });
+      } catch (notifErr) {
+        console.error("Kh\u00f4ng th\u1ec3 g\u1eedi notification thanh to\u00e1n th\u1ea5t b\u1ea1i", notifErr);
+      }
     }
 
     res.json({ success: true });
