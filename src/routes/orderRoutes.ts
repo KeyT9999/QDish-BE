@@ -5,6 +5,9 @@ import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { Table } from "../models/Table.js";
 import { sendNewOrderNotification } from "../services/emailService.js";
 import { emitNewOrder } from "../realtime/socket.js";
+import { createSystemNotification } from "../services/notificationService.js";
+import { NotificationType, NotificationPriority } from "../models/Notification.js";
+import { User, UserRole } from "../models/User.js";
 
 const router = Router();
 
@@ -74,6 +77,31 @@ router.post("/", async (req, res) => {
   });
 
   emitNewOrder(restaurantId, order.toJSON());
+
+  // Auto notification: new order
+  try {
+    const restaurantStaff = await User.find({
+      restaurantId: new mongoose.Types.ObjectId(restaurantId),
+      role: { $in: [UserRole.RESTAURANT_ADMIN, UserRole.STAFF] },
+      isActive: true
+    }).select("_id");
+
+    const itemCount = items.reduce((sum: number, item: any) => sum + item.quantity, 0);
+    if (restaurantStaff.length > 0) {
+      await createSystemNotification({
+        title: "Đơn hàng mới",
+        message: `Bàn ${tableNumber} vừa đặt ${itemCount} món - ${totalAmount.toLocaleString("vi-VN")}đ`,
+        type: NotificationType.ORDER,
+        priority: NotificationPriority.URGENT,
+        recipientUserIds: restaurantStaff.map(s => s._id),
+        restaurantId,
+        orderId: order._id.toString(),
+        actionUrl: `/dashboard?tab=orders`
+      });
+    }
+  } catch (notifError) {
+    console.error("Không thể gửi notification đơn hàng mới", notifError);
+  }
 
   // Gửi email thông báo đơn hàng mới cho chủ quán
   try {
