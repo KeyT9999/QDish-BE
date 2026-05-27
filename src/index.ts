@@ -17,6 +17,8 @@ import uploadRoutes from "./routes/uploadRoutes.js";
 import subscriptionRoutes from "./routes/subscriptionRoutes.js";
 import adminSubscriptionRoutes from "./routes/adminSubscriptionRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import tableSessionRoutes from "./routes/tableSessionRoutes.js";
+import billRoutes from "./routes/billRoutes.js";
 import { initRealtime } from "./realtime/socket.js";
 
 const app = express();
@@ -42,6 +44,8 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api", subscriptionRoutes);
 app.use("/api/admin", adminSubscriptionRoutes);
+app.use("/api/table-sessions", tableSessionRoutes);
+app.use("/api/bills", billRoutes);
 app.use("/api", notificationRoutes);
 
 connectDB().then(() => {
