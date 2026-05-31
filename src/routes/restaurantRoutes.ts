@@ -18,6 +18,15 @@ const APP_BASE_URL =
   process.env.CLIENT_URL ||
   "http://localhost:5173";
 
+const serializePaymentSettings = (restaurant: any) => ({
+  restaurantId: restaurant._id?.toString(),
+  bankName: restaurant.bankName || "",
+  bankAccountNumber: restaurant.bankAccountNumber || restaurant.bankAccount || "",
+  bankAccountHolder: restaurant.bankAccountHolder || restaurant.ownerName || "",
+  bankQrImageUrl: restaurant.bankQrImageUrl || "",
+  updatedAt: restaurant.paymentSettingsUpdatedAt || restaurant.updatedAt
+});
+
 // Thống kê tổng quan
 router.get("/stats/overview", requireAuth, requireRole(UserRole.SUPER_ADMIN), async (_req, res) => {
   try {
@@ -83,6 +92,41 @@ router.get("/public/:id", async (req, res) => {
     res.status(500).json({ message: "Không thể lấy thông tin nhà hàng", error });
   }
 });
+
+router.get(
+  "/:restaurantId/payment-settings",
+  requireAuth,
+  requireRole([UserRole.RESTAURANT_OWNER, UserRole.RESTAURANT_ADMIN, UserRole.STAFF, UserRole.SUPER_ADMIN] as string[]),
+  async (req: AuthRequest, res) => {
+    try {
+      const { restaurantId } = req.params;
+      const role = req.auth?.role;
+
+      if (!mongoose.isValidObjectId(restaurantId)) {
+        return res.status(400).json({ message: "restaurantId khong hop le" });
+      }
+
+      const restaurant = await Restaurant.findById(restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ message: "Khong tim thay nha hang" });
+      }
+
+      if (role === UserRole.RESTAURANT_OWNER) {
+        if (restaurant.ownerId?.toString() !== req.auth?.sub) {
+          return res.status(403).json({ message: "Ban khong co quyen xem cau hinh thanh toan cua nha hang nay" });
+        }
+      } else if (role !== UserRole.SUPER_ADMIN) {
+        if (!req.auth?.restaurantId || req.auth.restaurantId !== restaurantId) {
+          return res.status(403).json({ message: "Ban khong co quyen xem cau hinh thanh toan cua nha hang nay" });
+        }
+      }
+
+      return res.json({ settings: serializePaymentSettings(restaurant) });
+    } catch (error) {
+      return res.status(500).json({ message: "Khong the lay cau hinh thanh toan", error });
+    }
+  }
+);
 
 router.get("/:id/stats/revenue", requireAuth, requireRole(UserRole.SUPER_ADMIN), async (req, res) => {
   try {

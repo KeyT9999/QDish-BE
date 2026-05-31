@@ -4,9 +4,12 @@ import { User, UserRole } from "../models/User.js";
 import { Order, OrderStatus } from "../models/Order.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import mongoose from "mongoose";
-import { emitOrderUpdated } from "../realtime/socket.js";
+import { emitBillPaid, emitOrderUpdated, emitTableSessionClosed, emitTableStatusUpdated } from "../realtime/socket.js";
 import { createSystemNotification } from "../services/notificationService.js";
 import { NotificationType, NotificationPriority } from "../models/Notification.js";
+import { TableStatus } from "../models/Table.js";
+import { closeTableSession, TableSessionLifecycleError } from "../services/tableSessionLifecycleService.js";
+import { BillLifecycleError, payBill } from "../services/billLifecycleService.js";
 
 const router = Router();
 
@@ -126,7 +129,11 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
   const userId = req.auth?.sub;
   const userRole = req.auth?.role;
   const { id } = req.params;
-  const { status, paymentMethod } = req.body as { status?: string; paymentMethod?: string };
+  const { status, paymentMethod, cashReceived } = req.body as {
+    status?: string;
+    paymentMethod?: string;
+    cashReceived?: number;
+  };
 
   if (!restaurantId) {
     return res.status(403).json({ message: "Không xác định được nhà hàng" });
@@ -136,16 +143,22 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
     return res.status(400).json({ message: "Trạng thái đơn hàng không hợp lệ" });
   }
 
+  if (status === OrderStatus.COMPLETED) {
+    return res.status(400).json({
+      message: "Thanh toan chi duoc thuc hien o cap bill. Vui long dung API /api/bills/:billId/pay."
+    });
+  }
+
   // Kiểm tra đơn hàng tồn tại và lấy trạng thái hiện tại
   const existingOrder = await Order.findOne({ _id: id, restaurantId });
   if (!existingOrder) {
     return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
   }
 
-  // Nhân viên (STAFF) được phép xác nhận đơn (CONFIRMED) hoặc báo ra món (SERVED)
+  // Nhân viên (STAFF) được phép xử lý đơn theo thứ tự POS.
   if (userRole === UserRole.STAFF) {
     if (status !== OrderStatus.CONFIRMED && status !== OrderStatus.SERVED) {
-      return res.status(403).json({ message: "Nhân viên chỉ được phép xác nhận hoặc báo ra món" });
+      return res.status(403).json({ message: "Nhan vien chi duoc xac nhan hoac bao ra mon. Thanh toan thi dung bill." });
     }
     if (status === OrderStatus.CONFIRMED && existingOrder.status !== OrderStatus.PENDING) {
       return res.status(403).json({ message: "Chỉ có thể xác nhận đơn hàng đang chờ xử lý" });
@@ -203,7 +216,70 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
     return res.status(404).json({ message: "Không tìm thấy đơn hàng" });
   }
 
-  emitOrderUpdated(restaurantId, order.toJSON());
+  let responseOrder = order;
+
+  if (status === OrderStatus.COMPLETED && order.billId) {
+    try {
+      const result = await payBill({
+        billId: order.billId,
+        restaurantId,
+        paymentMethod,
+        cashReceived,
+        paidBy: userId
+      });
+
+      emitBillPaid(restaurantId, result.bill.toJSON());
+      emitTableSessionClosed(restaurantId, result.session.toJSON());
+      if (result.table) {
+        emitTableStatusUpdated(restaurantId, {
+          tableId: result.table._id,
+          code: result.table.code,
+          status: result.table.status,
+          activeSessionId: result.table.activeSessionId,
+          currentSessionCode: result.table.currentSessionCode
+        });
+      }
+      const refreshedOrder = await Order.findById(order._id);
+      if (refreshedOrder) {
+        responseOrder = refreshedOrder;
+      }
+    } catch (error) {
+      if (error instanceof BillLifecycleError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      console.error("Khong the thanh toan bill tu order", error);
+      return res.status(500).json({ message: "Khong the thanh toan bill", error });
+    }
+  } else if (status === OrderStatus.COMPLETED && order.tableSessionId) {
+    try {
+      const { session, table } = await closeTableSession({
+        sessionId: order.tableSessionId,
+        restaurantId,
+        paymentMethod,
+        markPaid: true,
+        closedBy: userId
+      });
+
+      emitTableSessionClosed(restaurantId, session.toJSON());
+      if (table) {
+        emitTableStatusUpdated(restaurantId, {
+          tableId: table._id,
+          code: table.code,
+          status: TableStatus.AVAILABLE,
+          activeSessionId: null,
+          currentSessionCode: null
+        });
+      }
+    } catch (error) {
+      if (error instanceof TableSessionLifecycleError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      console.error("Khong the dong phien ban sau khi thanh toan order", error);
+      return res.status(500).json({ message: "Khong the dong phien ban sau thanh toan", error });
+    }
+  }
+
+  emitOrderUpdated(restaurantId, responseOrder.toJSON());
 
   // Auto notification: order status updated
   try {
@@ -225,7 +301,7 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
     if (recipientUserIds.length > 0) {
       await createSystemNotification({
         title: "Đơn hàng cập nhật",
-        message: `Đơn hàng bàn ${order.tableNumber} đã chuyển sang trạng thái [${status}] bởi ${updatedByName}`,
+        message: `Đơn hàng bàn ${responseOrder.tableNumber} đã chuyển sang trạng thái [${status}] bởi ${updatedByName}`,
         type: NotificationType.ORDER,
         priority: NotificationPriority.NORMAL,
         recipientUserIds,
@@ -238,7 +314,7 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
     console.error("Không thể gửi notification cập nhật đơn hàng", notifError);
   }
 
-  res.json(order);
+  res.json(responseOrder);
 });
 
 // Khóa/mở khóa nhân viên

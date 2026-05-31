@@ -106,3 +106,23 @@ export const emitNotification = (userId: string, notification: unknown) => {
 export const emitUnreadCount = (userId: string, unreadCount: number) => {
   io?.to(getUserRoom(userId)).emit("notification:unread-count", { unreadCount });
 };
+
+// ──────────────────────────────────────────
+// Table Session Events (new)
+// ──────────────────────────────────────────
+
+export const emitTableSessionOpened = (restaurantId: string, session: unknown) => {
+  io?.to(getRestaurantRoom(restaurantId)).emit("table-session:opened", session);
+};
+
+export const emitTableSessionClosed = (restaurantId: string, session: unknown) => {
+  io?.to(getRestaurantRoom(restaurantId)).emit("table-session:closed", session);
+};
+
+export const emitTableStatusUpdated = (restaurantId: string, table: unknown) => {
+  io?.to(getRestaurantRoom(restaurantId)).emit("table:status-updated", table);
+};
+
+export const emitBillPaid = (restaurantId: string, bill: unknown) => {
+  io?.to(getRestaurantRoom(restaurantId)).emit("bill:paid", bill);
+};

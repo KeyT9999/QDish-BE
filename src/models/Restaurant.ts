@@ -14,6 +14,12 @@ export interface IRestaurant extends Document {
   phone: string;
   status: RestaurantStatus;
   active: boolean;
+  bankAccountNumber?: string;
+  bankAccountHolder?: string;
+  bankQrImageUrl?: string;
+  bankQrPublicId?: string;
+  paymentSettingsUpdatedByOwnerId?: Types.ObjectId;
+  paymentSettingsUpdatedAt?: Date;
   bankAccount?: string; // Số tài khoản ngân hàng
   bankName?: string; // Tên ngân hàng
   ownerId?: Types.ObjectId; // ID chủ nhà hàng
@@ -69,6 +75,29 @@ const RestaurantSchema = new Schema<IRestaurant>(
     bankName: {
       type: String,
       trim: true
+    },
+    bankAccountNumber: {
+      type: String,
+      trim: true
+    },
+    bankAccountHolder: {
+      type: String,
+      trim: true
+    },
+    bankQrImageUrl: {
+      type: String,
+      trim: true
+    },
+    bankQrPublicId: {
+      type: String,
+      trim: true
+    },
+    paymentSettingsUpdatedByOwnerId: {
+      type: Schema.Types.ObjectId,
+      ref: "User"
+    },
+    paymentSettingsUpdatedAt: {
+      type: Date
     },
     ownerId: {
       type: Schema.Types.ObjectId,
