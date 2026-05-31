@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 
 import { MenuItem } from "../models/MenuItem.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
+import { NutritionService } from "../services/nutritionService.js";
 
 const router = Router();
 
@@ -33,7 +34,27 @@ router.get("/", async (req, res) => {
   }
 
   const items = await MenuItem.find(filter).sort({ createdAt: -1 }).lean();
-  res.json(items);
+  
+  // Map virtual fields for frontend consumption
+  const itemsWithNutrition = items.map((item) => ({
+    ...item,
+    id: item._id,
+    nutrition: {
+      calories: item.calories ?? 0,
+      protein: item.protein ?? 0,
+      carbs: item.carbs ?? 0,
+      fat: item.fat ?? 0,
+      fiber: item.fiber ?? 0,
+      sugar: item.sugar ?? 0,
+      sodium: item.sodium ?? 0,
+      nutritionScore: item.nutritionScore ?? 0
+    },
+    // Expose attribute / allergen arrays from recipe engine
+    healthTags: item.healthTags ?? [],
+    allergens: item.allergens ?? [],
+  }));
+
+  res.json(itemsWithNutrition);
 });
 
 // Restaurant Admin: thêm món
@@ -67,8 +88,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 
   const { 
     name, description, price, category, categoryId, imageUrl, available,
-    calories, protein, carbs, fat, fiber, sugar, sodium, nutritionScore,
-    allergens, healthTags, healthLabels
+    ingredients, servingCount, servingSizeGrams, cookingMethod
   } = req.body;
 
   if (!name || typeof price !== "number" || !category) {
@@ -86,18 +106,33 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     categoryId,
     imageUrl,
     available: available ?? true,
-    calories: calories ?? 0,
-    protein: protein ?? 0,
-    carbs: carbs ?? 0,
-    fat: fat ?? 0,
-    fiber: fiber ?? 0,
-    sugar: sugar ?? 0,
-    sodium: sodium ?? 0,
-    nutritionScore: nutritionScore ?? 0,
-    allergens: allergens ?? [],
-    healthTags: healthTags ?? [],
-    healthLabels: healthLabels ?? []
+    ingredients: ingredients ?? [],
+    servingCount: servingCount ?? 1,
+    servingSizeGrams: servingSizeGrams ?? 0,
+    cookingMethod: cookingMethod ?? "raw"
   });
+
+  // Calculate and cache nutrition profile
+  if (ingredients && ingredients.length > 0) {
+    await NutritionService.calculateDishNutrition(item._id);
+  }
+
+  // Reload item to get updated nutrition cache fields
+  const updatedItem = await MenuItem.findById(item._id).lean();
+  if (updatedItem) {
+    (updatedItem as any).id = updatedItem._id;
+    (updatedItem as any).nutrition = {
+      calories: updatedItem.calories ?? 0,
+      protein: updatedItem.protein ?? 0,
+      carbs: updatedItem.carbs ?? 0,
+      fat: updatedItem.fat ?? 0,
+      fiber: updatedItem.fiber ?? 0,
+      sugar: updatedItem.sugar ?? 0,
+      sodium: updatedItem.sodium ?? 0,
+      nutritionScore: updatedItem.nutritionScore ?? 0
+    };
+    return res.status(201).json(updatedItem);
+  }
 
   res.status(201).json(item);
 });
@@ -113,8 +148,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
 
   const { 
     name, description, price, category, categoryId, imageUrl, available,
-    calories, protein, carbs, fat, fiber, sugar, sodium, nutritionScore,
-    allergens, healthTags, healthLabels
+    ingredients, servingCount, servingSizeGrams, cookingMethod
   } = req.body;
 
   const update: any = {};
@@ -125,17 +159,10 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (categoryId !== undefined) update.categoryId = categoryId;
   if (imageUrl !== undefined) update.imageUrl = imageUrl;
   if (available !== undefined) update.available = available;
-  if (calories !== undefined) update.calories = calories;
-  if (protein !== undefined) update.protein = protein;
-  if (carbs !== undefined) update.carbs = carbs;
-  if (fat !== undefined) update.fat = fat;
-  if (fiber !== undefined) update.fiber = fiber;
-  if (sugar !== undefined) update.sugar = sugar;
-  if (sodium !== undefined) update.sodium = sodium;
-  if (nutritionScore !== undefined) update.nutritionScore = nutritionScore;
-  if (allergens !== undefined) update.allergens = allergens;
-  if (healthTags !== undefined) update.healthTags = healthTags;
-  if (healthLabels !== undefined) update.healthLabels = healthLabels;
+  if (ingredients !== undefined) update.ingredients = ingredients;
+  if (servingCount !== undefined) update.servingCount = servingCount;
+  if (servingSizeGrams !== undefined) update.servingSizeGrams = servingSizeGrams;
+  if (cookingMethod !== undefined) update.cookingMethod = cookingMethod;
 
   const item = await MenuItem.findOneAndUpdate(
     { _id: req.params.id, restaurantId },
@@ -145,6 +172,26 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
 
   if (!item) {
     return res.status(404).json({ message: "Không tìm thấy món ăn" });
+  }
+
+  // Recalculate and update the cache profile
+  await NutritionService.calculateDishNutrition(item._id);
+
+  // Reload item to get updated nutrition cache fields
+  const updatedItem = await MenuItem.findById(item._id).lean();
+  if (updatedItem) {
+    (updatedItem as any).id = updatedItem._id;
+    (updatedItem as any).nutrition = {
+      calories: updatedItem.calories ?? 0,
+      protein: updatedItem.protein ?? 0,
+      carbs: updatedItem.carbs ?? 0,
+      fat: updatedItem.fat ?? 0,
+      fiber: updatedItem.fiber ?? 0,
+      sugar: updatedItem.sugar ?? 0,
+      sodium: updatedItem.sodium ?? 0,
+      nutritionScore: updatedItem.nutritionScore ?? 0
+    };
+    return res.json(updatedItem);
   }
 
   res.json(item);
