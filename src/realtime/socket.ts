@@ -2,6 +2,7 @@ import type { Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
 import jwt from "jsonwebtoken";
 
+import { createSocketCorsOptions } from "../config/cors.js";
 import type { AuthPayload } from "../middleware/auth.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
@@ -27,11 +28,7 @@ const getTokenFromSocket = (socket: Socket) => {
 
 export const initRealtime = (server: HttpServer) => {
   io = new Server(server, {
-    cors: {
-      origin: process.env.APP_BASE_URL || "*",
-      methods: ["GET", "POST"],
-      credentials: true
-    }
+    cors: createSocketCorsOptions()
   });
 
   io.use((socket, next) => {

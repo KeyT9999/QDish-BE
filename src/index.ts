@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 
+import { createCorsOptions } from "./config/cors.js";
 import { connectDB } from "./config/db.js";
 import restaurantRoutes from "./routes/restaurantRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -30,8 +31,10 @@ import { initRealtime } from "./realtime/socket.js";
 const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 5000;
+const corsOptions = createCorsOptions();
 
-app.use(cors());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
