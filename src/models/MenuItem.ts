@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
+export interface IDishIngredient {
+  ingredientId: Types.ObjectId;
+  quantity: number;
+  unit: 'g' | 'ml' | 'piece' | 'tbsp' | 'tsp' | 'cup' | 'bowl';
+  gramsResolved: number;
+}
+
 export interface IMenuItem extends Document {
   restaurantId: Types.ObjectId;
   name: string;
@@ -10,7 +17,13 @@ export interface IMenuItem extends Document {
   imageUrl: string;
   available: boolean;
   
-  // QDish fields
+  // QDish core recipe fields
+  ingredients: IDishIngredient[];
+  servingCount: number;
+  servingSizeGrams: number;
+  cookingMethod: string;
+  
+  // QDish computed cache fields (fallback / populated inline)
   calories?: number;
   protein?: number;
   carbs?: number;
@@ -18,11 +31,33 @@ export interface IMenuItem extends Document {
   fiber?: number;
   sugar?: number;
   sodium?: number;
-  nutritionScore?: number;
+  confidenceScore?: number;
   allergens?: string[];
-  healthTags?: string[];
-  healthLabels?: string[];
+  foodAttributes?: string[];
 }
+
+const DishIngredientSchema = new Schema<IDishIngredient>({
+  ingredientId: {
+    type: Schema.Types.ObjectId,
+    ref: "Ingredient",
+    required: true
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    min: 0.01
+  },
+  unit: {
+    type: String,
+    enum: ['g', 'ml', 'piece', 'tbsp', 'tsp', 'cup', 'bowl'],
+    required: true
+  },
+  gramsResolved: {
+    type: Number,
+    required: true,
+    min: 0
+  }
+}, { _id: false });
 
 const MenuItemSchema = new Schema<IMenuItem>(
   {
@@ -67,7 +102,27 @@ const MenuItemSchema = new Schema<IMenuItem>(
       default: true
     },
     
-    // QDish fields
+    // QDish Core Recipe fields
+    ingredients: {
+      type: [DishIngredientSchema],
+      default: []
+    },
+    servingCount: {
+      type: Number,
+      default: 1,
+      min: 1
+    },
+    servingSizeGrams: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    cookingMethod: {
+      type: String,
+      default: "raw"
+    },
+    
+    // QDish computed fields cache
     calories: {
       type: Number,
       default: 0,
@@ -103,7 +158,7 @@ const MenuItemSchema = new Schema<IMenuItem>(
       default: 0,
       min: 0
     },
-    nutritionScore: {
+    confidenceScore: {
       type: Number,
       default: 0,
       min: 0
@@ -112,11 +167,7 @@ const MenuItemSchema = new Schema<IMenuItem>(
       type: [String],
       default: []
     },
-    healthTags: {
-      type: [String],
-      default: []
-    },
-    healthLabels: {
+    foodAttributes: {
       type: [String],
       default: []
     }
@@ -128,5 +179,3 @@ MenuItemSchema.index({ restaurantId: 1, available: 1, createdAt: -1 });
 MenuItemSchema.index({ restaurantId: 1, categoryId: 1, createdAt: -1 });
 
 export const MenuItem = mongoose.model<IMenuItem>("MenuItem", MenuItemSchema);
-
-
