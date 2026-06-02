@@ -47,10 +47,10 @@ router.get("/", async (req, res) => {
       fiber: item.fiber ?? 0,
       sugar: item.sugar ?? 0,
       sodium: item.sodium ?? 0,
-      nutritionScore: item.nutritionScore ?? 0
+      confidenceScore: item.confidenceScore ?? 0
     },
     // Expose attribute / allergen arrays from recipe engine
-    healthTags: item.healthTags ?? [],
+    foodAttributes: item.foodAttributes ?? [],
     allergens: item.allergens ?? [],
   }));
 
@@ -129,7 +129,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       fiber: updatedItem.fiber ?? 0,
       sugar: updatedItem.sugar ?? 0,
       sodium: updatedItem.sodium ?? 0,
-      nutritionScore: updatedItem.nutritionScore ?? 0
+      confidenceScore: updatedItem.confidenceScore ?? 0
     };
     return res.status(201).json(updatedItem);
   }
@@ -189,7 +189,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       fiber: updatedItem.fiber ?? 0,
       sugar: updatedItem.sugar ?? 0,
       sodium: updatedItem.sodium ?? 0,
-      nutritionScore: updatedItem.nutritionScore ?? 0
+      confidenceScore: updatedItem.confidenceScore ?? 0
     };
     return res.json(updatedItem);
   }

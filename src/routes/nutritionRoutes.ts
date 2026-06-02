@@ -17,7 +17,34 @@ router.post("/preview", requireAuth, async (req: AuthRequest, res) => {
 
     // Trigger preview calculation without saving to DB
     const preview = await NutritionService.calculateNutrition(ingredients, sc);
-    return res.json(preview);
+    
+    // Map backend ComputedNutrition to frontend's expected NutritionPreviewResult structure
+    const responseData = {
+      perServing: {
+        calories: preview.calories,
+        protein: preview.protein,
+        carbs: preview.carb,
+        fat: preview.fat,
+        fiber: preview.fiber,
+        sugar: preview.sugar,
+        sodium: preview.sodium
+      },
+      totalDish: {
+        calories: Number((preview.calories * sc).toFixed(1)),
+        protein: Number((preview.protein * sc).toFixed(1)),
+        carbs: Number((preview.carb * sc).toFixed(1)),
+        fat: Number((preview.fat * sc).toFixed(1)),
+        fiber: Number((preview.fiber * sc).toFixed(1)),
+        sugar: Number((preview.sugar * sc).toFixed(1)),
+        sodium: Number((preview.sodium * sc).toFixed(1))
+      },
+      servingCount: sc,
+      attributes: preview.attributes,
+      allergens: preview.allergens,
+      confidence: preview.nutritionConfidence
+    };
+
+    return res.json(responseData);
   } catch (error: any) {
     console.error("Error previewing nutrition:", error);
     return res.status(500).json({ message: "Lỗi hệ thống khi tính toán dữ liệu dinh dưỡng" });

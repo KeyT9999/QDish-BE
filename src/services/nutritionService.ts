@@ -60,6 +60,7 @@ export class NutritionService {
     let totalSugar = 0;
     let totalSodium = 0;
     const allergenSet = new Set<string>();
+    const resolvedIngredients: Array<{ ingredientId: string; name: string; category: string; allergens: string[] }> = [];
 
     for (const item of ingredientsInput) {
       const ingredient = await Ingredient.findById(item.ingredientId);
@@ -81,6 +82,13 @@ export class NutritionService {
       if (ingredient.allergens && ingredient.allergens.length > 0) {
         ingredient.allergens.forEach((a) => allergenSet.add(a));
       }
+
+      resolvedIngredients.push({
+        ingredientId: ingredient._id.toString(),
+        name: ingredient.name,
+        category: ingredient.category,
+        allergens: ingredient.allergens || []
+      });
     }
 
     // Per serving calculation
@@ -97,22 +105,7 @@ export class NutritionService {
     const discrepancy = calories > 0 ? Math.abs(calcKcal - calories) / calories : 0;
     const nutritionConfidence = calories > 0 ? Number(Math.max(0, 1 - discrepancy).toFixed(2)) : 1.0;
 
-    // Rule-based Food Attribute V1 Engine
-    const attributes: string[] = [];
-    if (protein >= 25) {
-      attributes.push("HIGH_PROTEIN");
-    }
-    if (sugar <= 5 && ingredientsInput.length > 0) {
-      attributes.push("LOW_SUGAR");
-    }
-    if (calories <= 400 && calories > 0) {
-      attributes.push("LOW_CALORIE");
-    }
-    if (calories >= 700) {
-      attributes.push("ENERGY_DENSE");
-    }
-
-    return {
+    const draftNutrition: ComputedNutrition = {
       calories,
       protein,
       carb,
@@ -120,10 +113,19 @@ export class NutritionService {
       fiber,
       sugar,
       sodium,
-      attributes,
+      attributes: [],
       allergens: Array.from(allergenSet),
       nutritionConfidence
     };
+
+    // Calculate food attributes using the enhanced AttributeEngine
+    const { AttributeEngine } = await import("../engines/attributes/AttributeEngine.js");
+    draftNutrition.attributes = AttributeEngine.applyAllRules(draftNutrition, {
+      servingCount: sc,
+      ingredients: resolvedIngredients
+    });
+
+    return draftNutrition;
   }
 
   /**
@@ -157,6 +159,11 @@ export class NutritionService {
 
     const computed = await this.calculateNutrition(dish.ingredients, dish.servingCount);
 
+    // Compute fit scores and best fit context for the dish
+    const { FitScoreEngine } = await import("../engines/fitScore/FitScoreEngine.js");
+    const fitScores = FitScoreEngine.calculateAllFitScores(computed, computed.attributes);
+    const bestFit = FitScoreEngine.getBestFitContext(fitScores);
+
     // Upsert into DishNutritionProfile
     const profile = await DishNutritionProfile.findOneAndUpdate(
       { dishId: dish._id },
@@ -172,6 +179,8 @@ export class NutritionService {
         attributes: computed.attributes,
         allergens: computed.allergens,
         nutritionConfidence: computed.nutritionConfidence,
+        fitScores,
+        bestFitContext: bestFit.type,
         calculatedAt: new Date()
       },
       { new: true, upsert: true }
@@ -186,8 +195,8 @@ export class NutritionService {
     dish.sugar = computed.sugar;
     dish.sodium = computed.sodium;
     dish.allergens = computed.allergens;
-    dish.healthLabels = computed.attributes as any; // maps attributes to healthLabels
-    dish.nutritionScore = Math.round(computed.nutritionConfidence * 100);
+    dish.foodAttributes = computed.attributes;
+    dish.confidenceScore = Math.round(computed.nutritionConfidence * 100);
     
     await dish.save();
 

@@ -31,10 +31,9 @@ export interface IMenuItem extends Document {
   fiber?: number;
   sugar?: number;
   sodium?: number;
-  nutritionScore?: number;
+  confidenceScore?: number;
   allergens?: string[];
-  healthTags?: string[];
-  healthLabels?: string[];
+  foodAttributes?: string[];
 }
 
 const DishIngredientSchema = new Schema<IDishIngredient>({
@@ -159,7 +158,7 @@ const MenuItemSchema = new Schema<IMenuItem>(
       default: 0,
       min: 0
     },
-    nutritionScore: {
+    confidenceScore: {
       type: Number,
       default: 0,
       min: 0
@@ -168,11 +167,7 @@ const MenuItemSchema = new Schema<IMenuItem>(
       type: [String],
       default: []
     },
-    healthTags: {
-      type: [String],
-      default: []
-    },
-    healthLabels: {
+    foodAttributes: {
       type: [String],
       default: []
     }
