@@ -2,6 +2,7 @@ import mongoose, { Types } from "mongoose";
 import { Ingredient, IIngredient } from "../models/Ingredient.js";
 import { DishNutritionProfile, IDishNutritionProfile } from "../models/DishNutritionProfile.js";
 import { MenuItem } from "../models/MenuItem.js";
+import { repairDishNutritionProfileIndexes } from "./dishNutritionProfileIndexService.js";
 
 export interface ComputedNutrition {
   calories: number;
@@ -17,6 +18,25 @@ export interface ComputedNutrition {
 }
 
 export class NutritionService {
+  private static nutritionProfileIndexesRepaired = false;
+
+  private static normalizeDishId(dishId: string | Types.ObjectId): Types.ObjectId {
+    if (!dishId || !mongoose.Types.ObjectId.isValid(dishId)) {
+      throw new Error("Valid dishId is required to calculate nutrition");
+    }
+
+    return typeof dishId === "string" ? new mongoose.Types.ObjectId(dishId) : dishId;
+  }
+
+  private static async ensureNutritionProfileIndexes(): Promise<void> {
+    if (NutritionService.nutritionProfileIndexesRepaired) {
+      return;
+    }
+
+    await repairDishNutritionProfileIndexes();
+    NutritionService.nutritionProfileIndexesRepaired = true;
+  }
+
   /**
    * Converts quantity and unit into absolute grams.
    */
@@ -133,10 +153,19 @@ export class NutritionService {
    * and caches the result in both DishNutritionProfile and MenuItem.
    */
   public static async calculateDishNutrition(dishId: string | Types.ObjectId): Promise<IDishNutritionProfile | null> {
-    const dish = await MenuItem.findById(dishId);
+    const normalizedDishId = this.normalizeDishId(dishId);
+
+    const dish = await MenuItem.findById(normalizedDishId);
     if (!dish) {
       return null;
     }
+
+    // Skip nutrition calculation when there are no ingredients
+    if (!dish.ingredients || dish.ingredients.length === 0) {
+      return null;
+    }
+
+    await NutritionService.ensureNutritionProfileIndexes();
 
     // Resolve resolved grams for the embedded list
     const updatedIngredients = [];
@@ -168,6 +197,7 @@ export class NutritionService {
     const profile = await DishNutritionProfile.findOneAndUpdate(
       { dishId: dish._id },
       {
+        dishId: dish._id,
         restaurantId: dish.restaurantId,
         calories: computed.calories,
         protein: computed.protein,

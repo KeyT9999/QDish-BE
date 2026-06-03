@@ -28,7 +28,8 @@ const getTokenFromSocket = (socket: Socket) => {
 
 export const initRealtime = (server: HttpServer) => {
   io = new Server(server, {
-    cors: createSocketCorsOptions()
+    cors: createSocketCorsOptions(),
+    transports: ["websocket", "polling"]
   });
 
   io.use((socket, next) => {

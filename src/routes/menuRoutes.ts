@@ -114,7 +114,11 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 
   // Calculate and cache nutrition profile
   if (ingredients && ingredients.length > 0) {
-    await NutritionService.calculateDishNutrition(item._id);
+    try {
+      await NutritionService.calculateDishNutrition(item._id);
+    } catch (err) {
+      console.error("[menuRoutes] Nutrition calculation failed for new item:", (err as Error).message);
+    }
   }
 
   // Reload item to get updated nutrition cache fields
@@ -175,7 +179,11 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   }
 
   // Recalculate and update the cache profile
-  await NutritionService.calculateDishNutrition(item._id);
+  try {
+    await NutritionService.calculateDishNutrition(item._id);
+  } catch (err) {
+    console.error("[menuRoutes] Nutrition calculation failed for updated item:", (err as Error).message);
+  }
 
   // Reload item to get updated nutrition cache fields
   const updatedItem = await MenuItem.findById(item._id).lean();

@@ -2,7 +2,9 @@ import type { CorsOptions } from "cors";
 
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
+  "http://localhost:3000",
   "http://127.0.0.1:5173",
+  "http://127.0.0.1:3000",
   "https://qdish-three.vercel.app"
 ];
 
@@ -73,6 +75,11 @@ export const createCorsOptions = (env: NodeJS.ProcessEnv = process.env): CorsOpt
 
   return {
     origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
       if (isOriginAllowed(origin, allowedOrigins)) {
         callback(null, true);
         return;
@@ -82,15 +89,20 @@ export const createCorsOptions = (env: NodeJS.ProcessEnv = process.env): CorsOpt
     },
     credentials: true,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-restaurant-id"],
     optionsSuccessStatus: 204
   };
 };
 
 export const createSocketCorsOptions = (env: NodeJS.ProcessEnv = process.env) => {
-  const corsOptions = createCorsOptions(env);
+  const allowedOrigins = buildAllowedOrigins(env);
 
   return {
-    origin: corsOptions.origin,
+    origin: allowedOrigins.length > 0 ? allowedOrigins : [
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "https://qdish-three.vercel.app"
+    ],
     methods: ["GET", "POST"],
     credentials: true
   };
