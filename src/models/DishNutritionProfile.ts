@@ -22,7 +22,7 @@ export interface IDishNutritionProfile extends Document {
 
 const DishNutritionProfileSchema = new Schema<IDishNutritionProfile>(
   {
-    dishId: { type: Schema.Types.ObjectId, ref: "MenuItem", required: true, unique: true, index: true },
+    dishId: { type: Schema.Types.ObjectId, ref: "MenuItem", required: true },
     restaurantId: { type: Schema.Types.ObjectId, ref: "Restaurant", required: true, index: true },
     calories: { type: Number, required: true, min: 0 },
     protein: { type: Number, required: true, min: 0 },
@@ -41,6 +41,14 @@ const DishNutritionProfileSchema = new Schema<IDishNutritionProfile>(
   { timestamps: true }
 );
 
+DishNutritionProfileSchema.index(
+  { dishId: 1 },
+  {
+    name: "dishId_1",
+    unique: true,
+    partialFilterExpression: { dishId: { $type: "objectId" } }
+  }
+);
 DishNutritionProfileSchema.index({ restaurantId: 1, calories: 1 });
 DishNutritionProfileSchema.index({ restaurantId: 1, protein: -1 });
 

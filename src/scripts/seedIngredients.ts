@@ -826,6 +826,7 @@ async function seed() {
         aliasNormalized: a.alias
           .toLowerCase()
           .trim()
+          .replace(/đ/g, "d")
           .normalize("NFD")
           .replace(/[\u0300-\u036f]/g, "")
           .replace(/[^\w\s]/g, ""),
@@ -838,6 +839,7 @@ async function seed() {
         alias: newIngredient.name.toLowerCase(),
         aliasNormalized: newIngredient.name
           .toLowerCase()
+          .replace(/đ/g, "d")
           .normalize("NFD")
           .replace(/[\u0300-\u036f]/g, "")
           .replace(/[^\w\s]/g, ""),

@@ -37,6 +37,14 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use(express.json());
 
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    environment: process.env.NODE_ENV || "production",
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
