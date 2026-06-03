@@ -13,6 +13,17 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Thiếu restaurantId trong yêu cầu." });
     }
 
+    const { resolveOwnerByRestaurant, getPlanLimits } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(restaurantId);
+    if (!ownerId) {
+      return res.status(404).json({ message: "Không tìm thấy thông tin nhà hàng hoặc chủ sở hữu." });
+    }
+
+    const { plan } = await getPlanLimits(ownerId);
+    if (!plan || !plan.recommendationEnabled) {
+      return res.status(403).json({ message: "Tính năng gợi ý món ăn không khả dụng cho gói dịch vụ của nhà hàng này." });
+    }
+
     // Resolve user dining profile details if userId supplied
     let userDiningProfile = undefined;
     if (userId) {

@@ -49,6 +49,30 @@ router.post("/resolve", async (req, res) => {
       return res.status(404).json({ message: "Khong tim thay nha hang dang hoat dong" });
     }
 
+    // Check if an active session already exists for this table
+    const activeSession = await TableSession.findOne({
+      restaurantId: new mongoose.Types.ObjectId(restaurantId),
+      tableNumber: tableNumber.trim(),
+      status: { $in: [TableSessionStatus.OPEN, TableSessionStatus.PAYMENT_REQUESTED] }
+    });
+
+    if (!activeSession) {
+      // It will create a new session. Check scan limit!
+      const { resolveOwnerByRestaurant, getPlanLimits, getOwnerUsage } = await import("../services/subscriptionService.js");
+      const ownerId = await resolveOwnerByRestaurant(restaurantId);
+      if (ownerId) {
+        const { plan } = await getPlanLimits(ownerId);
+        if (plan && plan.scanLimitMonthly !== -1) {
+          const usage = await getOwnerUsage(ownerId);
+          if (usage.scanCount >= plan.scanLimitMonthly) {
+            return res.status(403).json({
+              message: `Nhà hàng đã hết lượt quét QR trong tháng này (Gói ${plan.name} giới hạn ${plan.scanLimitMonthly} lượt quét/tháng). Vui lòng liên hệ quản lý để nâng cấp gói dịch vụ.`
+            });
+          }
+        }
+      }
+    }
+
     const { session, table, created } = await resolveTableSession({
       restaurantId,
       tableNumber,

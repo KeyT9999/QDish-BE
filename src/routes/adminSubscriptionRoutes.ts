@@ -19,6 +19,13 @@ type NormalizedPlanPayload = {
   tableLimit?: number;
   menuItemLimit?: number;
   staffLimit?: number;
+  scanLimitMonthly?: number;
+  fitScoreEnabled?: boolean;
+  foodAttributesEnabled?: boolean;
+  recommendationEnabled?: boolean;
+  personalizedMenuEnabled?: boolean;
+  advancedAnalyticsEnabled?: boolean;
+  customerInsightsEnabled?: boolean;
   features?: string[];
   unavailableFeatures?: string[];
   isPopular?: boolean;
@@ -91,11 +98,25 @@ const normalizePlanPayload = (
   if (priceYearly !== undefined) payload.priceYearly = priceYearly;
   else if (mode === "create" && body.priceYearly === undefined) payload.priceYearly = 0;
 
-  const limitFields = ["restaurantLimit", "tableLimit", "menuItemLimit", "staffLimit"] as const;
+  const limitFields = ["restaurantLimit", "tableLimit", "menuItemLimit", "staffLimit", "scanLimitMonthly"] as const;
   for (const field of limitFields) {
     const value = normalizeNumber(body[field], field, -1, errors);
     if (value !== undefined) payload[field] = value;
     else if (mode === "create" && body[field] === undefined) payload[field] = -1;
+  }
+
+  const aiFields = [
+    "fitScoreEnabled",
+    "foodAttributesEnabled",
+    "recommendationEnabled",
+    "personalizedMenuEnabled",
+    "advancedAnalyticsEnabled",
+    "customerInsightsEnabled"
+  ] as const;
+  for (const field of aiFields) {
+    const value = normalizeBoolean(body[field], field, errors);
+    if (value !== undefined) payload[field] = value;
+    else if (mode === "create" && body[field] === undefined) payload[field] = false;
   }
 
   const features = normalizeStringArray(body.features, "features", errors);
@@ -290,6 +311,13 @@ router.patch("/plans/:id", async (req, res) => {
     if (payload.tableLimit !== undefined) plan.tableLimit = payload.tableLimit;
     if (payload.menuItemLimit !== undefined) plan.menuItemLimit = payload.menuItemLimit;
     if (payload.staffLimit !== undefined) plan.staffLimit = payload.staffLimit;
+    if (payload.scanLimitMonthly !== undefined) plan.scanLimitMonthly = payload.scanLimitMonthly;
+    if (payload.fitScoreEnabled !== undefined) plan.fitScoreEnabled = payload.fitScoreEnabled;
+    if (payload.foodAttributesEnabled !== undefined) plan.foodAttributesEnabled = payload.foodAttributesEnabled;
+    if (payload.recommendationEnabled !== undefined) plan.recommendationEnabled = payload.recommendationEnabled;
+    if (payload.personalizedMenuEnabled !== undefined) plan.personalizedMenuEnabled = payload.personalizedMenuEnabled;
+    if (payload.advancedAnalyticsEnabled !== undefined) plan.advancedAnalyticsEnabled = payload.advancedAnalyticsEnabled;
+    if (payload.customerInsightsEnabled !== undefined) plan.customerInsightsEnabled = payload.customerInsightsEnabled;
     if (payload.features !== undefined) plan.features = payload.features;
     if (payload.unavailableFeatures !== undefined) plan.unavailableFeatures = payload.unavailableFeatures;
     if (payload.isPopular !== undefined) plan.isPopular = payload.isPopular;

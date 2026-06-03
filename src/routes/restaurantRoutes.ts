@@ -81,13 +81,38 @@ router.get("/public/:id", async (req, res) => {
     }
 
     const restaurant = await Restaurant.findById(id)
-      .select("_id id name address phone status active bankAccount bankName");
+      .select("_id id name address phone status active bankAccount bankName ownerId");
 
     if (!restaurant || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
       return res.status(404).json({ message: "Không tìm thấy nhà hàng" });
     }
 
-    res.json(restaurant);
+    let planFeatures = {
+      fitScoreEnabled: false,
+      foodAttributesEnabled: false,
+      recommendationEnabled: false,
+      personalizedMenuEnabled: false
+    };
+
+    if (restaurant.ownerId) {
+      const { getPlanLimits } = await import("../services/subscriptionService.js");
+      try {
+        const { plan } = await getPlanLimits(restaurant.ownerId);
+        planFeatures = {
+          fitScoreEnabled: plan.fitScoreEnabled || false,
+          foodAttributesEnabled: plan.foodAttributesEnabled || false,
+          recommendationEnabled: plan.recommendationEnabled || false,
+          personalizedMenuEnabled: plan.personalizedMenuEnabled || false
+        };
+      } catch (err) {
+        console.error("Lỗi khi tải cấu hình gói của nhà hàng:", err);
+      }
+    }
+
+    res.json({
+      ...restaurant.toObject(),
+      features: planFeatures
+    });
   } catch (error) {
     res.status(500).json({ message: "Không thể lấy thông tin nhà hàng", error });
   }
@@ -521,7 +546,37 @@ router.get(
       if (!restaurant) {
         return res.status(404).json({ message: "Không tìm thấy nhà hàng" });
       }
-      res.json(restaurant);
+
+      let planFeatures = {
+        fitScoreEnabled: false,
+        foodAttributesEnabled: false,
+        recommendationEnabled: false,
+        personalizedMenuEnabled: false,
+        advancedAnalyticsEnabled: false,
+        customerInsightsEnabled: false
+      };
+
+      if (restaurant.ownerId) {
+        const { getPlanLimits } = await import("../services/subscriptionService.js");
+        try {
+          const { plan } = await getPlanLimits(restaurant.ownerId);
+          planFeatures = {
+            fitScoreEnabled: plan.fitScoreEnabled || false,
+            foodAttributesEnabled: plan.foodAttributesEnabled || false,
+            recommendationEnabled: plan.recommendationEnabled || false,
+            personalizedMenuEnabled: plan.personalizedMenuEnabled || false,
+            advancedAnalyticsEnabled: plan.advancedAnalyticsEnabled || false,
+            customerInsightsEnabled: plan.customerInsightsEnabled || false
+          };
+        } catch (err) {
+          console.error("Lỗi khi tải cấu hình gói của nhà hàng:", err);
+        }
+      }
+
+      res.json({
+        ...restaurant.toObject(),
+        features: planFeatures
+      });
     } catch (error) {
       res.status(500).json({ message: "Không thể lấy thông tin nhà hàng", error });
     }
