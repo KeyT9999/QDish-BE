@@ -36,6 +36,7 @@ const RestaurantSchema = new Schema<IRestaurant>(
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
       trim: true
     },
     ownerName: {

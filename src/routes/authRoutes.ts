@@ -22,7 +22,8 @@ router.post("/login", async (req, res) => {
     return res.status(400).json({ message: "Thiếu tên đăng nhập/email hoặc mật khẩu" });
   }
 
-  let user = await User.findOne({ username: username.trim() });
+  const normalizedUsername = username.trim().toLowerCase();
+  let user = await User.findOne({ username: normalizedUsername });
 
   // Nếu không tìm thấy user theo username, thử tìm theo email của restaurant
   if (!user) {
@@ -100,7 +101,7 @@ router.post("/register-owner/request-otp", async (req, res) => {
     }
 
     // 2. Check unique username & email
-    const existingUsername = await User.findOne({ username: username.trim() });
+    const existingUsername = await User.findOne({ username: username.trim().toLowerCase() });
     if (existingUsername) {
       return res.status(409).json({ message: "Tên đăng nhập đã tồn tại trong hệ thống" });
     }
@@ -115,7 +116,7 @@ router.post("/register-owner/request-otp", async (req, res) => {
 
     // Clear old registration sessions for this email/username to avoid duplicates
     await OwnerRegisterToken.deleteMany({ email: email.trim().toLowerCase() });
-    await OwnerRegisterToken.deleteMany({ username: username.trim() });
+    await OwnerRegisterToken.deleteMany({ username: username.trim().toLowerCase() });
 
     const passwordHash = await bcrypt.hash(password, 10);
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes validity
@@ -124,7 +125,7 @@ router.post("/register-owner/request-otp", async (req, res) => {
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
       phone: phone.trim(),
-      username: username.trim(),
+      username: username.trim().toLowerCase(),
       passwordHash,
       otp,
       expiresAt,
@@ -174,23 +175,23 @@ router.post("/register-owner/verify-otp", async (req, res) => {
     }
 
     // Double check unique username/email before final creation
-    const existingUsername = await User.findOne({ username: tokenDoc.username });
+    const existingUsername = await User.findOne({ username: tokenDoc.username.toLowerCase() });
     if (existingUsername) {
       return res.status(409).json({ message: "Tên đăng nhập đã bị đăng ký trong thời gian chờ xác thực" });
     }
 
-    const existingEmail = await User.findOne({ email: tokenDoc.email, role: UserRole.RESTAURANT_OWNER });
+    const existingEmail = await User.findOne({ email: tokenDoc.email.toLowerCase(), role: UserRole.RESTAURANT_OWNER });
     if (existingEmail) {
       return res.status(409).json({ message: "Email đã bị đăng ký trong thời gian chờ xác thực" });
     }
 
     // Tạo User RESTAURANT_OWNER
     const newOwner = await User.create({
-      username: tokenDoc.username,
+      username: tokenDoc.username.toLowerCase(),
       passwordHash: tokenDoc.passwordHash,
       role: UserRole.RESTAURANT_OWNER,
       fullName: tokenDoc.fullName,
-      email: tokenDoc.email,
+      email: tokenDoc.email.toLowerCase(),
       phone: tokenDoc.phone,
       isEmailVerified: true,
       isActive: true

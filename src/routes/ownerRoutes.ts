@@ -29,7 +29,7 @@ router.post("/", async (req, res) => {
     }
 
     // Check unique username
-    const existingUsername = await User.findOne({ username: username.trim() });
+    const existingUsername = await User.findOne({ username: username.trim().toLowerCase() });
     if (existingUsername) {
       return res.status(409).json({ message: "Tên đăng nhập đã tồn tại" });
     }
@@ -45,7 +45,7 @@ router.post("/", async (req, res) => {
 
     // Create user RESTAURANT_OWNER
     const newOwner = await User.create({
-      username: username.trim(),
+      username: username.trim().toLowerCase(),
       passwordHash,
       role: UserRole.RESTAURANT_OWNER,
       fullName: fullName.trim(),

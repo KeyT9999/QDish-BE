@@ -35,6 +35,7 @@ const OwnerRegisterTokenSchema = new Schema<IOwnerRegisterToken>(
     username: {
       type: String,
       required: true,
+      lowercase: true,
       trim: true
     },
     passwordHash: {

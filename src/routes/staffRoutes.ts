@@ -78,14 +78,14 @@ router.post("/", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN] as string[
     console.error("Lỗi khi kiểm tra giới hạn nhân viên:", err);
   }
 
-  const existingUser = await User.findOne({ username });
+  const existingUser = await User.findOne({ username: username.trim().toLowerCase() });
   if (existingUser) {
     return res.status(400).json({ message: "Username đã tồn tại" });
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
   const staff = await User.create({
-    username,
+    username: username.trim().toLowerCase(),
     passwordHash,
     role: UserRole.STAFF,
     restaurantId: new mongoose.Types.ObjectId(restaurantId),
@@ -389,13 +389,13 @@ router.patch("/:id", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN] as str
       return res.status(404).json({ message: "Không tìm thấy nhân viên" });
     }
 
-    if (username && username.trim() !== staff.username) {
+    if (username && username.trim().toLowerCase() !== staff.username.toLowerCase()) {
       // Kiểm tra username mới có trùng không
-      const existingUser = await User.findOne({ username: username.trim() });
+      const existingUser = await User.findOne({ username: username.trim().toLowerCase() });
       if (existingUser && existingUser._id.toString() !== id) {
         return res.status(400).json({ message: "Username đã tồn tại" });
       }
-      staff.username = username.trim();
+      staff.username = username.trim().toLowerCase();
     }
 
     if (password) {
