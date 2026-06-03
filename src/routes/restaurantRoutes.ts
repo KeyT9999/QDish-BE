@@ -277,7 +277,7 @@ router.post("/", requireAuth, requireRole(UserRole.SUPER_ADMIN), async (req, res
       return res.status(400).json({ message: "Trạng thái nhà hàng không hợp lệ" });
     }
 
-    const existingUser = await User.findOne({ username });
+    const existingUser = await User.findOne({ username: username.trim().toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ message: "Username đã tồn tại" });
     }
@@ -298,7 +298,7 @@ router.post("/", requireAuth, requireRole(UserRole.SUPER_ADMIN), async (req, res
 
     const restaurant = await Restaurant.create({
       name,
-      username,
+      username: username.trim().toLowerCase(),
       ownerName,
       email: normalizedEmail,
       address,
@@ -308,7 +308,7 @@ router.post("/", requireAuth, requireRole(UserRole.SUPER_ADMIN), async (req, res
     });
 
     await User.create({
-      username,
+      username: username.trim().toLowerCase(),
       passwordHash,
       role: UserRole.RESTAURANT_ADMIN,
       restaurantId: restaurant._id

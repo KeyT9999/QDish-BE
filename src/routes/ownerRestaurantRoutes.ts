@@ -124,7 +124,7 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
     }
 
     // Check unique username in User collection
-    const existingUser = await User.findOne({ username: restaurantUsername.trim() });
+    const existingUser = await User.findOne({ username: restaurantUsername.trim().toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ message: "Tên đăng nhập tài khoản chi nhánh đã tồn tại trong hệ thống" });
     }
@@ -136,7 +136,7 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
     // Create Restaurant
     const restaurant = await Restaurant.create({
       name: restaurantName.trim(),
-      username: restaurantUsername.trim(),
+      username: restaurantUsername.trim().toLowerCase(),
       ownerName,
       email: restaurantEmail.trim().toLowerCase(),
       address: address.trim(),
@@ -151,7 +151,7 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
 
     // Create User RESTAURANT_ADMIN
     const adminAccount = await User.create({
-      username: restaurantUsername.trim(),
+      username: restaurantUsername.trim().toLowerCase(),
       passwordHash,
       role: UserRole.RESTAURANT_ADMIN,
       restaurantId: restaurant._id,

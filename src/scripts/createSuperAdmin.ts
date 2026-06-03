@@ -14,7 +14,8 @@ if (!username || !password) {
 const run = async () => {
   await connectDB();
 
-  const existing = await User.findOne({ username });
+  const normalizedUsername = username.trim().toLowerCase();
+  const existing = await User.findOne({ username: normalizedUsername });
   if (existing) {
     console.log("User already exists");
     process.exit(0);
@@ -23,7 +24,7 @@ const run = async () => {
   const passwordHash = await bcrypt.hash(password, 10);
 
   await User.create({
-    username,
+    username: normalizedUsername,
     passwordHash,
     role: UserRole.SUPER_ADMIN
   });

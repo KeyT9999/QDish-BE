@@ -27,6 +27,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
       trim: true
     },
     passwordHash: {
@@ -58,6 +59,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       unique: true,
       sparse: true,
+      lowercase: true,
       trim: true
     },
     phone: {
