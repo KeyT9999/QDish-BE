@@ -185,7 +185,35 @@ router.get("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), a
       ownerId: new mongoose.Types.ObjectId(ownerId)
     }).sort({ createdAt: -1 });
 
-    res.json(restaurants);
+    const { getPlanLimits } = await import("../services/subscriptionService.js");
+    let planFeatures = {
+      fitScoreEnabled: false,
+      foodAttributesEnabled: false,
+      recommendationEnabled: false,
+      personalizedMenuEnabled: false,
+      advancedAnalyticsEnabled: false,
+      customerInsightsEnabled: false
+    };
+    try {
+      const { plan } = await getPlanLimits(ownerId);
+      planFeatures = {
+        fitScoreEnabled: plan.fitScoreEnabled || false,
+        foodAttributesEnabled: plan.foodAttributesEnabled || false,
+        recommendationEnabled: plan.recommendationEnabled || false,
+        personalizedMenuEnabled: plan.personalizedMenuEnabled || false,
+        advancedAnalyticsEnabled: plan.advancedAnalyticsEnabled || false,
+        customerInsightsEnabled: plan.customerInsightsEnabled || false
+      };
+    } catch (err) {
+      console.error("Lỗi khi tải cấu hình gói của owner:", err);
+    }
+
+    const restaurantsWithFeatures = restaurants.map(r => ({
+      ...r.toObject(),
+      features: planFeatures
+    }));
+
+    res.json(restaurantsWithFeatures);
   } catch (error) {
     console.error("Lỗi khi lấy danh sách nhà hàng của chủ sở hữu:", error);
     res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi tải danh sách chi nhánh", error });

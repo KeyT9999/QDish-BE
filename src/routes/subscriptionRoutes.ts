@@ -133,13 +133,21 @@ router.get(
           tableLimit: plan.tableLimit,
           menuItemLimit: plan.menuItemLimit,
           staffLimit: plan.staffLimit,
+          scanLimitMonthly: plan.scanLimitMonthly !== undefined ? plan.scanLimitMonthly : -1,
+          fitScoreEnabled: plan.fitScoreEnabled || false,
+          foodAttributesEnabled: plan.foodAttributesEnabled || false,
+          recommendationEnabled: plan.recommendationEnabled || false,
+          personalizedMenuEnabled: plan.personalizedMenuEnabled || false,
+          advancedAnalyticsEnabled: plan.advancedAnalyticsEnabled || false,
+          customerInsightsEnabled: plan.customerInsightsEnabled || false,
           features: plan.features
         },
         usage: {
           restaurantCount: usage.restaurantCount,
           tableCount: usage.tableCount,
           menuItemCount: usage.menuItemCount,
-          staffCount: usage.staffCount
+          staffCount: usage.staffCount,
+          scanCount: usage.scanCount
         }
       });
     } catch (error: any) {

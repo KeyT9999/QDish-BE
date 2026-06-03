@@ -5,6 +5,7 @@ import { Restaurant } from "../models/Restaurant.js";
 import { Table } from "../models/Table.js";
 import { MenuItem } from "../models/MenuItem.js";
 import { User, UserRole } from "../models/User.js";
+import { TableSession, SessionCreatedBy } from "../models/TableSession.js";
 
 /**
  * Lấy Subscription đang hoạt động (ACTIVE) của Owner.
@@ -78,6 +79,7 @@ export async function getOwnerUsage(ownerId: string | mongoose.Types.ObjectId): 
   tableCount: number;
   menuItemCount: number;
   staffCount: number;
+  scanCount: number;
 }> {
   const oid = typeof ownerId === "string" ? new mongoose.Types.ObjectId(ownerId) : ownerId;
 
@@ -100,11 +102,23 @@ export async function getOwnerUsage(ownerId: string | mongoose.Types.ObjectId): 
     role: UserRole.STAFF
   });
 
+  // 5. Số lượt quét QR (TableSession CUSTOMER_SCAN trong tháng hiện tại)
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const scanCount = await TableSession.countDocuments({
+    restaurantId: { $in: restaurantIds },
+    createdBy: SessionCreatedBy.CUSTOMER_SCAN,
+    createdAt: { $gte: startOfMonth }
+  });
+
   return {
     restaurantCount,
     tableCount,
     menuItemCount,
-    staffCount
+    staffCount,
+    scanCount
   };
 }
 

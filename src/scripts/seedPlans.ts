@@ -4,81 +4,91 @@ import { Plan } from "../models/Plan.js";
 
 const plansData = [
   {
-    name: "Starter / FREE",
+    name: "FREE",
     code: "FREE",
-    description: "Phù hợp cho quán ăn nhỏ, cafe hoặc dùng thử dịch vụ",
+    description: "Khởi động số hóa thực đơn & nâng cao tương tác ban đầu",
     priceMonthly: 0,
     priceYearly: 0,
     restaurantLimit: 1,
     tableLimit: 5,
     menuItemLimit: 10,
     staffLimit: 3,
+    scanLimitMonthly: 500,
+    fitScoreEnabled: false,
+    foodAttributesEnabled: false,
+    recommendationEnabled: false,
+    personalizedMenuEnabled: false,
+    advancedAnalyticsEnabled: false,
+    customerInsightsEnabled: false,
     features: [
-      "1 chi nhánh/nhà hàng",
-      "Tối đa 5 bàn",
-      "Tối đa 10 món",
-      "Tối đa 3 nhân viên (staff)",
-      "QR menu cơ bản",
-      "Order realtime cơ bản",
-      "Dashboard thống kê cơ bản",
-      "Thông tin dinh dưỡng cơ bản"
+      "1 chi nhánh hoạt động",
+      "QR Menu số hóa chuẩn hóa",
+      "Hồ sơ dinh dưỡng thực đơn"
+    ],
+    unavailableFeatures: [
+      "Fit Score & Cá nhân hóa menu",
+      "Dashboard quản trị sâu"
     ],
     isPopular: false,
     isActive: true,
     sortOrder: 1
   },
   {
-    name: "Growth / PLUS",
+    name: "PLUS",
     code: "PLUS",
-    description: "Tối ưu cho quán vừa, đông khách hoặc chuỗi local nhỏ",
+    description: "Cá nhân hóa tối đa trải nghiệm thực khách & tối ưu thực đơn",
     priceMonthly: 299000,
     priceYearly: 2990000,
     restaurantLimit: 3,
     tableLimit: 30,
     menuItemLimit: 150,
     staffLimit: 15,
+    scanLimitMonthly: 5000,
+    fitScoreEnabled: true,
+    foodAttributesEnabled: true,
+    recommendationEnabled: true,
+    personalizedMenuEnabled: true,
+    advancedAnalyticsEnabled: false,
+    customerInsightsEnabled: false,
     features: [
-      "Tất cả tính năng của gói FREE",
-      "Tối đa 3 chi nhánh/nhà hàng",
-      "Tối đa 30 bàn",
-      "Tối đa 150 món",
-      "Tối đa 15 nhân viên (staff)",
-      "Analytics doanh thu nâng cao & món bán chạy",
-      "Peak hour analytics (phân tích giờ cao điểm)",
-      "Bộ lọc dinh dưỡng & Health recommendation nâng cao",
-      "Advanced realtime alert & Popup chuông báo bếp",
-      "Xuất báo cáo Excel / PDF",
-      "Custom logo nhà hàng & branding nhẹ",
-      "Hỗ trợ ưu tiên cơ bản"
+      "Tối đa 3 chi nhánh",
+      "QR Menu & Hồ sơ dinh dưỡng",
+      "Fit Score / Điểm tương thích món",
+      "Personalized Menu cá nhân",
+      "Food Attributes chuyên sâu"
+    ],
+    unavailableFeatures: [
+      "Dashboard quản trị sâu"
     ],
     isPopular: true,
     isActive: true,
     sortOrder: 2
   },
   {
-    name: "Restaurant / PRO",
+    name: "PRO",
     code: "PRO",
-    description: "Thích hợp cho nhà hàng lớn, chuỗi chi nhánh, cloud kitchen chuyên nghiệp",
+    description: "Khai thác tối đa tài nguyên dữ liệu & thúc đẩy tăng trưởng doanh thu",
     priceMonthly: 999000,
     priceYearly: 9990000,
-    restaurantLimit: -1, // Unlimited
-    tableLimit: -1,      // Unlimited
-    menuItemLimit: -1,   // Unlimited
-    staffLimit: -1,      // Unlimited
+    restaurantLimit: -1, // Không giới hạn chi nhánh
+    tableLimit: -1,      // Không giới hạn bàn (bỏ bàn)
+    menuItemLimit: -1,
+    staffLimit: -1,      // Không giới hạn nhân viên (bỏ nhân viên)
+    scanLimitMonthly: -1, // Vô hạn scan
+    fitScoreEnabled: true,
+    foodAttributesEnabled: true,
+    recommendationEnabled: true,
+    personalizedMenuEnabled: true,
+    advancedAnalyticsEnabled: true,
+    customerInsightsEnabled: true,
     features: [
-      "Tất cả tính năng của gói PLUS",
-      "Không giới hạn số lượng chi nhánh",
-      "Không giới hạn số lượng bàn",
-      "Không giới hạn số lượng món ăn",
-      "Không giới hạn số lượng nhân viên",
-      "Quản lý chuỗi đa chi nhánh (Centralized dashboard)",
-      "Phân tích so sánh hiệu suất giữa các chi nhánh",
-      "Quản lý bếp trung tâm (Multi-kitchen workflow)",
-      "Hệ thống phân quyền nâng cao (Full permission system)",
-      "Màn hình KDS nâng cao cho bếp",
-      "Đồng bộ thời gian thực đa thiết bị chuyên nghiệp",
-      "Sẵn sàng API Integration & Custom Domain"
+      "Không giới hạn chi nhánh",
+      "Bao gồm mọi tính năng của PLUS",
+      "AI Recommendation Engine",
+      "Merchant Dashboard & Analytics",
+      "Customer Insights & Phân tích sâu"
     ],
+    unavailableFeatures: [],
     isPopular: false,
     isActive: true,
     sortOrder: 3

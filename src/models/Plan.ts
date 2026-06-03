@@ -10,6 +10,13 @@ export interface IPlan extends Document {
   tableLimit: number;      // -1 for unlimited
   menuItemLimit: number;   // -1 for unlimited
   staffLimit: number;      // -1 for unlimited
+  scanLimitMonthly: number; // -1 for unlimited
+  fitScoreEnabled: boolean;
+  foodAttributesEnabled: boolean;
+  recommendationEnabled: boolean;
+  personalizedMenuEnabled: boolean;
+  advancedAnalyticsEnabled: boolean;
+  customerInsightsEnabled: boolean;
   features: string[];
   unavailableFeatures: string[];
   isPopular: boolean;
@@ -71,6 +78,35 @@ const PlanSchema = new Schema<IPlan>(
       required: true,
       min: -1,
       default: -1
+    },
+    scanLimitMonthly: {
+      type: Number,
+      required: true,
+      default: -1
+    },
+    fitScoreEnabled: {
+      type: Boolean,
+      default: false
+    },
+    foodAttributesEnabled: {
+      type: Boolean,
+      default: false
+    },
+    recommendationEnabled: {
+      type: Boolean,
+      default: false
+    },
+    personalizedMenuEnabled: {
+      type: Boolean,
+      default: false
+    },
+    advancedAnalyticsEnabled: {
+      type: Boolean,
+      default: false
+    },
+    customerInsightsEnabled: {
+      type: Boolean,
+      default: false
     },
     features: {
       type: [String],

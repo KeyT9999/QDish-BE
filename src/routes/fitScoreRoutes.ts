@@ -9,6 +9,22 @@ const router = Router();
 router.get("/:dishId/fit-score", async (req, res) => {
   try {
     const { dishId } = req.params;
+    const dish = await MenuItem.findById(dishId);
+    if (!dish) {
+      return res.status(404).json({ message: "Không tìm thấy món ăn." });
+    }
+
+    const { resolveOwnerByRestaurant, getPlanLimits } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(dish.restaurantId);
+    if (!ownerId) {
+      return res.status(404).json({ message: "Không tìm thấy thông tin nhà hàng hoặc chủ sở hữu." });
+    }
+
+    const { plan } = await getPlanLimits(ownerId);
+    if (!plan || !plan.fitScoreEnabled) {
+      return res.status(403).json({ message: "Tính năng Fit Score không khả dụng cho gói dịch vụ của nhà hàng này." });
+    }
+
     const profile = await DishNutritionProfile.findOne({ dishId });
     if (!profile) {
       return res.status(404).json({ message: "Không tìm thấy thông tin dinh dưỡng của món ăn này." });
@@ -33,6 +49,17 @@ router.post("/:dishId/fit-score", async (req, res) => {
     const dish = await MenuItem.findById(dishId);
     if (!dish) {
       return res.status(404).json({ message: "Không tìm thấy món ăn." });
+    }
+
+    const { resolveOwnerByRestaurant, getPlanLimits } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(dish.restaurantId);
+    if (!ownerId) {
+      return res.status(404).json({ message: "Không tìm thấy thông tin nhà hàng hoặc chủ sở hữu." });
+    }
+
+    const { plan } = await getPlanLimits(ownerId);
+    if (!plan || !plan.fitScoreEnabled) {
+      return res.status(403).json({ message: "Tính năng Fit Score không khả dụng cho gói dịch vụ của nhà hàng này." });
     }
 
     const profile = await DishNutritionProfile.findOne({ dishId });
