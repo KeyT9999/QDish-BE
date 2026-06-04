@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User, UserRole } from "../models/User.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { calculateDaysRemaining } from "../services/subscriptionService.js";
 
 const router = Router();
 
@@ -140,7 +141,11 @@ router.get("/", async (req, res) => {
           planName,
           planCode,
           subscriptionStatus,
-          subscriptionExpiresAt
+          subscriptionExpiresAt,
+          daysRemaining: calculateDaysRemaining(
+            subscriptionExpiresAt ? new Date(subscriptionExpiresAt) : null,
+            planCode
+          )
         };
       })
     );

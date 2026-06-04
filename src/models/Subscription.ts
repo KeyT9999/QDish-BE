@@ -23,6 +23,7 @@ export interface ISubscription extends Document {
   expiresAt?: Date;
   paymentOrderCode?: number; // PayOS orderCode
   payosPaymentLinkId?: string;
+  lastWarningLevel?: string; // Notification dedup: 'none' | '7days' | '3days' | '1day' | 'expired'
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +74,10 @@ const SubscriptionSchema = new Schema<ISubscription>(
     },
     payosPaymentLinkId: {
       type: String
+    },
+    lastWarningLevel: {
+      type: String,
+      default: "none"
     }
   },
   { timestamps: true }
