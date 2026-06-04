@@ -27,6 +27,7 @@ import insightRoutes from "./routes/insightRoutes.js";
 import tableSessionRoutes from "./routes/tableSessionRoutes.js";
 import billRoutes from "./routes/billRoutes.js";
 import { initRealtime } from "./realtime/socket.js";
+import { initSubscriptionCronJob } from "./services/subscriptionCronJob.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -73,6 +74,7 @@ app.use("/api/recommendations", recommendationRoutes);
 
 connectDB().then(() => {
   initRealtime(httpServer);
+  initSubscriptionCronJob();
 
   httpServer.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);

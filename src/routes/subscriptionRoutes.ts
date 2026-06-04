@@ -10,7 +10,12 @@ import {
   getOwnerSubscription,
   getPlanLimits,
   getOwnerUsage,
-  checkPlanLimit
+  checkPlanLimit,
+  getPlanHierarchyLevel,
+  isUpgrade,
+  calculateDaysRemaining,
+  getExpiryWarningLevel,
+  getUpgradeablePlanCodes
 } from "../services/subscriptionService.js";
 import { createSystemNotification } from "../services/notificationService.js";
 import { NotificationType, NotificationPriority } from "../models/Notification.js";
@@ -115,6 +120,23 @@ router.get(
       // 2. Lấy usage hiện tại
       const usage = await getOwnerUsage(ownerId);
 
+      const daysRemaining = calculateDaysRemaining(subscription.expiresAt, subscription.planCode);
+      let expiryWarningLevel = getExpiryWarningLevel(subscription.expiresAt, subscription.planCode);
+
+      if (subscription.planCode === "FREE") {
+        const lastExpired = await Subscription.findOne({
+          ownerId: ownerId,
+          status: SubscriptionStatus.EXPIRED,
+          planCode: { $ne: "FREE" }
+        }).sort({ updatedAt: -1 });
+
+        if (lastExpired && (Date.now() - lastExpired.updatedAt.getTime() < 7 * 24 * 60 * 60 * 1000)) {
+          expiryWarningLevel = "expired";
+        }
+      }
+
+      const canUpgradeTo = getUpgradeablePlanCodes(subscription.planCode);
+
       res.json({
         subscription: {
           id: subscription._id,
@@ -126,7 +148,10 @@ router.get(
           billingCycle: subscription.billingCycle,
           amount: subscription.amount,
           startedAt: subscription.startedAt,
-          expiresAt: subscription.expiresAt
+          expiresAt: subscription.expiresAt,
+          daysRemaining,
+          expiryWarningLevel,
+          canUpgradeTo
         },
         limits: {
           restaurantLimit: plan.restaurantLimit,
@@ -195,38 +220,36 @@ router.post(
         return res.status(400).json({ message: "Gói dịch vụ hiện không khả dụng" });
       }
 
+      // ========== UPGRADE-ONLY VALIDATION ==========
+      // Lấy subscription hiện tại để kiểm tra hướng chuyển đổi
+      const currentSub = await getOwnerSubscription(ownerId);
+      const currentPlanCode = currentSub.planCode;
+
+      // Không cho phép downgrade (PLUS→FREE, PRO→PLUS, PRO→FREE)
+      if (!isUpgrade(currentPlanCode, plan.code) && currentPlanCode !== plan.code) {
+        return res.status(400).json({
+          message: `Không thể chuyển từ gói ${currentPlanCode} xuống gói ${plan.code}. Nếu muốn hạ gói, vui lòng chờ hết hạn hoặc liên hệ Super Admin.`,
+          code: "DOWNGRADE_NOT_ALLOWED"
+        });
+      }
+
       // Xác định số tiền
       const amount = cycle === BillingCycle.YEARLY ? plan.priceYearly : plan.priceMonthly;
 
-      // 2. Nếu là gói FREE (0đ): Cập nhật trực tiếp
+      // 2. Nếu là gói FREE (0đ): Chỉ cho phép nếu chưa có gói hoặc đang FREE
       if (amount === 0) {
-        // Hủy hoặc đổi subscription hiện tại thành FREE ACTIVE
-        let sub = await Subscription.findOne({ ownerId, status: SubscriptionStatus.ACTIVE });
-        if (sub) {
-          sub.planId = plan._id as mongoose.Types.ObjectId;
-          sub.planCode = plan.code;
-          sub.amount = 0;
-          sub.billingCycle = cycle;
-          sub.startedAt = new Date();
-          sub.expiresAt = new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000); // 100 năm
-          await sub.save();
-        } else {
-          sub = await Subscription.create({
-            ownerId,
-            planId: plan._id,
-            planCode: plan.code,
-            status: SubscriptionStatus.ACTIVE,
-            billingCycle: cycle,
-            amount: 0,
-            startedAt: new Date(),
-            expiresAt: new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000)
+        // Chỉ cho phép chuyển về FREE nếu đang ở FREE (reload) hoặc chưa có gói
+        if (currentPlanCode !== "FREE") {
+          return res.status(400).json({
+            message: `Không thể chuyển từ gói ${currentPlanCode} xuống gói FREE. Vui lòng chờ hết hạn hoặc liên hệ Super Admin.`,
+            code: "DOWNGRADE_NOT_ALLOWED"
           });
         }
 
         return res.json({
-          message: "Kích hoạt gói miễn phí thành công",
+          message: "Bạn đang sử dụng gói miễn phí.",
           isFree: true,
-          subscription: sub
+          subscription: currentSub
         });
       }
 

@@ -7,44 +7,119 @@ import { MenuItem } from "../models/MenuItem.js";
 import { User, UserRole } from "../models/User.js";
 import { TableSession, SessionCreatedBy } from "../models/TableSession.js";
 
+// ──────────────────────────────────────────
+// Plan Hierarchy
+// ──────────────────────────────────────────
+
+const PLAN_HIERARCHY: Record<string, number> = {
+  FREE: 0,
+  PLUS: 1,
+  PRO: 2
+};
+
+/**
+ * Trả về thứ bậc của gói: FREE=0, PLUS=1, PRO=2.
+ * Gói không xác định mặc định = 0.
+ */
+export function getPlanHierarchyLevel(planCode: string): number {
+  return PLAN_HIERARCHY[planCode?.toUpperCase()] ?? 0;
+}
+
+/**
+ * Kiểm tra việc chuyển đổi từ fromPlanCode sang toPlanCode có phải là upgrade hay không.
+ */
+export function isUpgrade(fromPlanCode: string, toPlanCode: string): boolean {
+  return getPlanHierarchyLevel(toPlanCode) > getPlanHierarchyLevel(fromPlanCode);
+}
+
+/**
+ * Tính số ngày còn lại trước khi hết hạn.
+ * Trả về -1 nếu không có expiresAt hoặc là gói FREE (vô thời hạn).
+ */
+export function calculateDaysRemaining(expiresAt?: Date | null, planCode?: string): number {
+  if (!expiresAt || planCode?.toUpperCase() === "FREE") return -1;
+  const now = new Date();
+  const diff = expiresAt.getTime() - now.getTime();
+  return Math.max(0, Math.ceil(diff / (24 * 60 * 60 * 1000)));
+}
+
+/**
+ * Xác định mức cảnh báo hết hạn.
+ */
+export function getExpiryWarningLevel(expiresAt?: Date | null, planCode?: string): string {
+  if (!expiresAt || planCode?.toUpperCase() === "FREE") return "none";
+  const days = calculateDaysRemaining(expiresAt, planCode);
+  if (days <= 0) return "expired";
+  if (days <= 1) return "1day";
+  if (days <= 3) return "3days";
+  if (days <= 7) return "7days";
+  return "none";
+}
+
+/**
+ * Trả về danh sách planCode mà owner có thể upgrade tới.
+ */
+export function getUpgradeablePlanCodes(currentPlanCode: string): string[] {
+  const currentLevel = getPlanHierarchyLevel(currentPlanCode);
+  return Object.entries(PLAN_HIERARCHY)
+    .filter(([, level]) => level > currentLevel)
+    .sort(([, a], [, b]) => a - b)
+    .map(([code]) => code);
+}
+
+// ──────────────────────────────────────────
+// Owner Subscription
+// ──────────────────────────────────────────
+
 /**
  * Lấy Subscription đang hoạt động (ACTIVE) của Owner.
  * Nếu không có, tự động tạo gói FREE ACTIVE cho Owner.
+ * Nếu subscription đã hết hạn (expiresAt < now) → tự động downgrade về FREE.
  */
 export async function getOwnerSubscription(ownerId: string | mongoose.Types.ObjectId): Promise<ISubscription> {
   const oid = typeof ownerId === "string" ? new mongoose.Types.ObjectId(ownerId) : ownerId;
 
-  // Tìm subscription active hoặc pending_payment gần nhất
-  // (Ưu tiên ACTIVE)
+  // Tìm subscription active
   let sub = await Subscription.findOne({
     ownerId: oid,
     status: SubscriptionStatus.ACTIVE
   });
 
-  if (!sub) {
-    // Tìm bất kỳ subscription nào của owner này
-    sub = await Subscription.findOne({ ownerId: oid }).sort({ createdAt: -1 });
+  // Nếu có subscription ACTIVE nhưng đã hết hạn (và không phải FREE) → auto downgrade
+  if (sub && sub.planCode !== "FREE" && sub.expiresAt && sub.expiresAt.getTime() < Date.now()) {
+    console.log(`[SubscriptionService] Auto-downgrade: Owner ${oid} plan ${sub.planCode} expired at ${sub.expiresAt.toISOString()}`);
+    sub.status = SubscriptionStatus.EXPIRED;
+    await sub.save();
+    sub = null; // Force creating FREE below
   }
 
-  // Nếu hoàn toàn chưa có subscription nào, hoặc subscription đã EXPIRED/CANCELLED nhưng không có ACTIVE nào khác
-  if (!sub || sub.status !== SubscriptionStatus.ACTIVE) {
-    // Tìm plan FREE trong DB
-    const freePlan = await Plan.findOne({ code: "FREE" });
-    if (!freePlan) {
-      throw new Error("Không tìm thấy cấu hình gói dịch vụ FREE trong cơ sở dữ liệu. Vui lòng chạy seed script.");
-    }
+  if (!sub) {
+    // Tìm bất kỳ subscription nào của owner này
+    const latestSub = await Subscription.findOne({ ownerId: oid }).sort({ createdAt: -1 });
 
-    // Tạo gói FREE ACTIVE mới cho Owner
-    sub = await Subscription.create({
-      ownerId: oid,
-      planId: freePlan._id,
-      planCode: freePlan.code,
-      status: SubscriptionStatus.ACTIVE,
-      billingCycle: BillingCycle.MONTHLY,
-      amount: 0,
-      startedAt: new Date(),
-      expiresAt: new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000) // 100 years
-    });
+    // Nếu hoàn toàn chưa có subscription nào, hoặc subscription đã EXPIRED/CANCELLED
+    if (!latestSub || latestSub.status !== SubscriptionStatus.ACTIVE) {
+      // Tìm plan FREE trong DB
+      const freePlan = await Plan.findOne({ code: "FREE" });
+      if (!freePlan) {
+        throw new Error("Không tìm thấy cấu hình gói dịch vụ FREE trong cơ sở dữ liệu. Vui lòng chạy seed script.");
+      }
+
+      // Tạo gói FREE ACTIVE mới cho Owner
+      sub = await Subscription.create({
+        ownerId: oid,
+        planId: freePlan._id,
+        planCode: freePlan.code,
+        status: SubscriptionStatus.ACTIVE,
+        billingCycle: BillingCycle.MONTHLY,
+        amount: 0,
+        startedAt: new Date(),
+        expiresAt: new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000), // 100 years
+        lastWarningLevel: "none"
+      });
+    } else {
+      sub = latestSub;
+    }
   }
 
   return sub;

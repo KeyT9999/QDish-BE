@@ -5,7 +5,7 @@ import { Subscription, SubscriptionStatus, BillingCycle } from "../models/Subscr
 import { PaymentTransaction, PaymentStatus } from "../models/PaymentTransaction.js";
 import { User, UserRole } from "../models/User.js";
 import { requireAuth, requireRole, AuthRequest } from "../middleware/auth.js";
-import { getOwnerUsage } from "../services/subscriptionService.js";
+import { getOwnerUsage, calculateDaysRemaining, getExpiryWarningLevel } from "../services/subscriptionService.js";
 
 const router = Router();
 
@@ -415,9 +415,17 @@ router.get("/subscriptions", async (req, res) => {
     const subscriptions = await Subscription.find()
       .populate("ownerId", "username fullName email phone")
       .populate("planId", "name code priceMonthly")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
     
-    res.json(subscriptions);
+    // Enrich with daysRemaining and warningLevel
+    const enriched = subscriptions.map((sub: any) => ({
+      ...sub,
+      daysRemaining: calculateDaysRemaining(sub.expiresAt, sub.planCode),
+      expiryWarningLevel: getExpiryWarningLevel(sub.expiresAt, sub.planCode)
+    }));
+
+    res.json(enriched);
   } catch (error: any) {
     console.error("Lỗi khi lấy danh sách đăng ký gói:", error);
     res.status(500).json({ message: "Lỗi hệ thống khi tải danh sách subscription" });

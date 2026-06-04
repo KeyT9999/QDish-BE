@@ -7,9 +7,15 @@ const router = Router();
 // GET /api/restaurants/insights - get insights for the current authenticated restaurant
 router.get("/insights", requireAuth, async (req: AuthRequest, res) => {
   try {
-    const restaurantId = req.auth?.restaurantId;
+    let restaurantId = req.auth?.restaurantId;
+    
+    // Nếu là Owner, lấy restaurantId từ query param
+    if (!restaurantId && req.query.restaurantId) {
+      restaurantId = req.query.restaurantId as string;
+    }
+
     if (!restaurantId) {
-      return res.status(403).json({ message: "Chỉ admin nhà hàng mới có quyền truy cập báo cáo này." });
+      return res.status(403).json({ message: "Không xác định được mã chi nhánh cần lấy báo cáo." });
     }
 
     const { resolveOwnerByRestaurant, getPlanLimits } = await import("../services/subscriptionService.js");
@@ -18,9 +24,14 @@ router.get("/insights", requireAuth, async (req: AuthRequest, res) => {
       return res.status(404).json({ message: "Không tìm thấy thông tin nhà hàng hoặc chủ sở hữu." });
     }
 
+    // Kiểm tra quyền sở hữu đối với OWNER
+    if (req.auth?.role === "RESTAURANT_OWNER" && ownerId.toString() !== req.auth?.sub) {
+      return res.status(403).json({ message: "Bạn không có quyền truy cập thông tin của chi nhánh này." });
+    }
+
     const { plan } = await getPlanLimits(ownerId);
-    if (!plan || !plan.customerInsightsEnabled) {
-      return res.status(403).json({ message: "Tính năng phân tích dữ liệu thực khách (Customer Insights) không khả dụng cho gói dịch vụ của bạn. Vui lòng nâng cấp lên gói PRO." });
+    if (!plan || !plan.personalizedMenuEnabled) {
+      return res.status(403).json({ message: "Tính năng phân tích dữ liệu thực khách (Customer Insights) không khả dụng cho gói dịch vụ của bạn. Vui lòng nâng cấp lên gói PLUS trở lên." });
     }
 
     const insights = await MerchantInsightService.getInsights(restaurantId.toString());
