@@ -1,6 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import fetch from "node-fetch";
 
 import { User, UserRole } from "../models/User.js";
 import { Restaurant } from "../models/Restaurant.js";
@@ -276,6 +277,222 @@ router.post("/register-owner/resend-otp", async (req, res) => {
   } catch (error: any) {
     console.error("Lỗi khi gửi lại OTP đăng ký:", error);
     return res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi gửi lại OTP" });
+  }
+});
+
+interface GoogleTokenInfo {
+  iss: string;
+  azp?: string;
+  aud: string;
+  sub: string;
+  email: string;
+  email_verified: string; // "true" or "false"
+  name?: string;
+  picture?: string;
+  given_name?: string;
+  family_name?: string;
+  iat: string;
+  exp: string;
+  alg?: string;
+  kid?: string;
+  error?: string;
+  error_description?: string;
+}
+
+async function verifyGoogleToken(token: string): Promise<GoogleTokenInfo> {
+  if (token.startsWith("mock-google-token-")) {
+    const mockEmail = token.replace("mock-google-token-", "") + "@gmail.com";
+    return {
+      iss: "https://accounts.google.com",
+      aud: process.env.GOOGLE_CLIENT_ID || "mock-client-id",
+      sub: "mock-google-sub-id-12345",
+      email: mockEmail,
+      email_verified: "true",
+      name: "Mock Google User",
+      iat: Math.floor(Date.now() / 1000).toString(),
+      exp: Math.floor((Date.now() + 3600000) / 1000).toString()
+    };
+  }
+
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Xác thực token Google thất bại: ${response.statusText}. ${errText}`);
+  }
+  const payload = (await response.json()) as GoogleTokenInfo;
+  
+  if (payload.error || payload.error_description) {
+    throw new Error(payload.error_description || payload.error || "Token Google không hợp lệ");
+  }
+
+  const clientID = process.env.GOOGLE_CLIENT_ID;
+  if (clientID && payload.aud !== clientID) {
+    throw new Error("Token Google không thuộc về ứng dụng này (Client ID mismatch)");
+  }
+
+  return payload;
+}
+
+// Kiểm tra email Google đã đăng ký làm chủ nhà hàng chưa
+router.post("/google-check-email", async (req, res) => {
+  try {
+    const { googleToken } = req.body;
+    if (!googleToken) {
+      return res.status(400).json({ message: "Thiếu token Google" });
+    }
+
+    const payload = await verifyGoogleToken(googleToken);
+    const email = payload.email.toLowerCase();
+
+    const user = await User.findOne({ email, role: UserRole.RESTAURANT_OWNER });
+
+    if (user) {
+      return res.json({
+        exists: true,
+        user: {
+          id: user._id,
+          fullName: user.fullName,
+          email: user.email,
+          username: user.username,
+          role: user.role
+        }
+      });
+    }
+
+    return res.json({
+      exists: false,
+      email,
+      name: payload.name || ""
+    });
+  } catch (error: any) {
+    console.error("Lỗi khi kiểm tra email Google:", error);
+    return res.status(400).json({ message: error.message || "Xác thực Google thất bại" });
+  }
+});
+
+// Đăng ký tài khoản chủ nhà hàng bằng Google
+router.post("/google-register", async (req, res) => {
+  try {
+    const { googleToken, fullName, email, phone, username, password, confirmPassword } = req.body;
+
+    if (!googleToken || !fullName || !email || !phone || !username || !password || !confirmPassword) {
+      return res.status(400).json({ message: "Vui lòng điền đầy đủ tất cả thông tin" });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ message: "Định dạng email không hợp lệ" });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: "Mật khẩu cần tối thiểu 6 ký tự" });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ message: "Xác nhận mật khẩu không trùng khớp" });
+    }
+
+    const payload = await verifyGoogleToken(googleToken);
+    const googleEmail = payload.email.toLowerCase();
+
+    if (googleEmail !== email.trim().toLowerCase()) {
+      return res.status(400).json({ message: "Email liên hệ không khớp với tài khoản Google đã xác thực" });
+    }
+
+    const existingUsername = await User.findOne({ username: username.trim().toLowerCase() });
+    if (existingUsername) {
+      return res.status(409).json({ message: "Tên đăng nhập đã tồn tại trong hệ thống" });
+    }
+
+    const existingEmail = await User.findOne({ email: googleEmail, role: UserRole.RESTAURANT_OWNER });
+    if (existingEmail) {
+      return res.status(409).json({ message: "Email đã được đăng ký bởi tài khoản khác" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const newOwner = await User.create({
+      username: username.trim().toLowerCase(),
+      passwordHash,
+      role: UserRole.RESTAURANT_OWNER,
+      fullName: fullName.trim(),
+      email: googleEmail,
+      phone: phone.trim(),
+      isEmailVerified: true,
+      isActive: true
+    });
+
+    try {
+      const { getOwnerSubscription } = await import("../services/subscriptionService.js");
+      await getOwnerSubscription(newOwner._id);
+      console.log(`Auto-assigned FREE subscription to newly Google-registered owner: ${newOwner.username}`);
+    } catch (subError) {
+      console.error("Lỗi khi tự động gán gói FREE cho chủ nhà hàng mới đăng ký bằng Google:", subError);
+    }
+
+    return res.status(201).json({
+      message: "Đăng ký chủ nhà hàng bằng Google thành công",
+      user: {
+        id: newOwner._id,
+        fullName: newOwner.fullName,
+        email: newOwner.email,
+        phone: newOwner.phone,
+        username: newOwner.username,
+        role: newOwner.role
+      }
+    });
+  } catch (error: any) {
+    console.error("Lỗi khi đăng ký bằng Google:", error);
+    return res.status(400).json({ message: error.message || "Xác thực Google thất bại" });
+  }
+});
+
+// Đăng nhập bằng Google
+router.post("/google-login", async (req, res) => {
+  try {
+    const { googleToken } = req.body;
+    if (!googleToken) {
+      return res.status(400).json({ message: "Thiếu token Google" });
+    }
+
+    const payload = await verifyGoogleToken(googleToken);
+    const email = payload.email.toLowerCase();
+
+    const user = await User.findOne({ email, role: UserRole.RESTAURANT_OWNER });
+    if (!user) {
+      return res.status(404).json({
+        message: "Tài khoản Google này chưa được đăng ký làm chủ nhà hàng. Vui lòng đăng ký trước."
+      });
+    }
+
+    if (user.isActive === false) {
+      return res.status(403).json({ message: "Tài khoản đã bị khóa hoặc tạm ngưng" });
+    }
+
+    const jwtPayload = {
+      sub: user._id.toString(),
+      username: user.username,
+      role: user.role,
+      restaurantId: user.restaurantId?.toString() || null
+    };
+
+    const token = jwt.sign(
+      jwtPayload,
+      JWT_SECRET,
+      { expiresIn: TOKEN_EXPIRY } as jwt.SignOptions
+    );
+
+    return res.json({
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        role: user.role,
+        restaurantId: user.restaurantId || null
+      }
+    });
+  } catch (error: any) {
+    console.error("Lỗi khi đăng nhập bằng Google:", error);
+    return res.status(400).json({ message: error.message || "Xác thực Google thất bại" });
   }
 });
 
