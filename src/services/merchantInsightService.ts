@@ -23,13 +23,21 @@ export interface MerchantInsights {
     label: string;
   }>;
   gapAnalysis: string[];
+  peakHours: {
+    periods: Array<{
+      period: string;
+      count: number;
+      percentage: number;
+    }>;
+    hourly: number[];
+  };
 }
 
 export class MerchantInsightService {
   /**
    * Generates comprehensive intelligence and analytics for a restaurant.
    */
-  public static async getInsights(restaurantId: string): Promise<MerchantInsights> {
+  public static async getInsights(restaurantId: string, period = "all"): Promise<MerchantInsights> {
     const rId = new mongoose.Types.ObjectId(restaurantId);
 
     // 1. Menu Coverage calculation
@@ -51,12 +59,41 @@ export class MerchantInsightService {
       }
     }
 
-    // 3. Top Dishes from completed Orders
-    // We aggregate all complete/served order items
-    const orders = await Order.find({
+    // 3. Date query calculation based on period
+    const now = new Date();
+    let start: Date | undefined;
+    let end: Date | undefined = new Date(now);
+    end.setHours(23, 59, 59, 999);
+
+    if (period === 'today') {
+      start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'week') {
+      const dayOfWeek = now.getDay();
+      const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      start = new Date(now.setDate(diff));
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'year') {
+      start = new Date(now.getFullYear(), 0, 1);
+      start.setHours(0, 0, 0, 0);
+    } else {
+      start = undefined;
+      end = undefined;
+    }
+
+    // Top Dishes from completed Orders in the timeframe
+    const orderQuery: any = {
       restaurantId: restaurantId,
       status: { $in: ["SERVED", "COMPLETED"] }
-    }).lean();
+    };
+    if (start && end) {
+      orderQuery.createdAt = { $gte: start, $lte: end };
+    }
+
+    const orders = await Order.find(orderQuery).lean();
 
     const dishSales: Record<string, { name: string; count: number; revenue: number }> = {};
     for (const o of orders) {
@@ -85,8 +122,11 @@ export class MerchantInsightService {
       .slice(0, 5);
 
     // 4. Customer segments (Dining Goals from active users)
-    // In guest model, we scan recently scanned user dining profiles in the DB
-    const recentProfiles = await UserDiningProfile.find().limit(200).lean();
+    const profileQuery: any = {};
+    if (start && end) {
+      profileQuery.updatedAt = { $gte: start, $lte: end };
+    }
+    const recentProfiles = await UserDiningProfile.find(profileQuery).limit(200).lean();
     const segmentsMap: Record<string, number> = {};
     
     // Seed default goals if database is empty of users
@@ -95,6 +135,7 @@ export class MerchantInsightService {
     segmentsMap["LIGHT_MEAL"] = 0;
     segmentsMap["ENERGY_BOOST"] = 0;
     segmentsMap["COMFORT"] = 0;
+    segmentsMap["WEIGHT_LOSS"] = 0;
 
     for (const prof of recentProfiles) {
       if (prof.goals && prof.goals.length > 0) {
@@ -105,12 +146,12 @@ export class MerchantInsightService {
     }
 
     const labelMap: Record<string, string> = {
-      MUSCLE_GAIN: "Tăng cơ 💪",
+      MUSCLE_GAIN: "Ăn tăng cơ 💪",
       BALANCED: "Ăn cân bằng ⚖️",
-      LIGHT_MEAL: "Ăn nhẹ nhàng 🥗",
-      ENERGY_BOOST: "Nạp năng lượng ⚡",
-      COMFORT: "Ăn ngon miệng 🫶",
-      WEIGHT_LOSS: "Giảm cân 🎯"
+      LIGHT_MEAL: "Ăn rau củ / Ít calo 🥗",
+      ENERGY_BOOST: "Ăn lấy năng lượng ⚡",
+      COMFORT: "Ăn thưởng thức 🫶",
+      WEIGHT_LOSS: "Ăn giảm béo 🎯"
     };
 
     // Fallback/Simulated data if restaurant is completely new with no profile scans
@@ -121,6 +162,7 @@ export class MerchantInsightService {
       segmentsMap["LIGHT_MEAL"] += 15;
       segmentsMap["ENERGY_BOOST"] += 8;
       segmentsMap["COMFORT"] += 10;
+      segmentsMap["WEIGHT_LOSS"] += 14;
     }
 
     const customerSegments = Object.entries(segmentsMap).map(([key, val]) => ({
@@ -149,6 +191,74 @@ export class MerchantInsightService {
       gapAnalysis.push("✨ Thực đơn của bạn đang được phân bổ vô cùng đa dạng và cân đối tuyệt hảo! Hãy tiếp tục duy trì.");
     }
 
+    // 5. Peak Hours & Meal Periods analysis
+    const hourlyCounts = Array(24).fill(0);
+    const periodCounts = {
+      breakfast: 0, // 6h - 11h
+      lunch: 0,     // 11h - 14h
+      afternoon: 0, // 14h - 17h
+      dinner: 0,    // 17h - 21h
+      night: 0,     // 21h - 6h
+    };
+
+    for (const o of orders) {
+      const date = o.createdAt ? new Date(o.createdAt) : new Date();
+      const hour = date.getHours();
+      hourlyCounts[hour] += 1;
+
+      if (hour >= 6 && hour < 11) {
+        periodCounts.breakfast += 1;
+      } else if (hour >= 11 && hour < 14) {
+        periodCounts.lunch += 1;
+      } else if (hour >= 14 && hour < 17) {
+        periodCounts.afternoon += 1;
+      } else if (hour >= 17 && hour < 21) {
+        periodCounts.dinner += 1;
+      } else {
+        periodCounts.night += 1;
+      }
+    }
+
+    const totalPeriodOrders = orders.length;
+    const periods = [
+      { label: "Bữa sáng (06:00 - 11:00)", count: periodCounts.breakfast },
+      { label: "Bữa trưa (11:00 - 14:00)", count: periodCounts.lunch },
+      { label: "Bữa xế / Chiều (14:00 - 17:00)", count: periodCounts.afternoon },
+      { label: "Bữa tối (17:00 - 21:00)", count: periodCounts.dinner },
+      { label: "Bữa đêm (21:00 - 06:00)", count: periodCounts.night },
+    ];
+
+    // Seed default simulated values if order count is 0, so the chart is populated beautifully
+    if (totalPeriodOrders === 0) {
+      periods[0].count = 4;
+      periods[1].count = 25;
+      periods[2].count = 8;
+      periods[3].count = 32;
+      periods[4].count = 6;
+      hourlyCounts[8] = 2;
+      hourlyCounts[9] = 2;
+      hourlyCounts[11] = 8;
+      hourlyCounts[12] = 12;
+      hourlyCounts[13] = 5;
+      hourlyCounts[15] = 4;
+      hourlyCounts[16] = 4;
+      hourlyCounts[18] = 10;
+      hourlyCounts[19] = 15;
+      hourlyCounts[20] = 7;
+      hourlyCounts[22] = 4;
+      hourlyCounts[23] = 2;
+    }
+
+    const finalTotal = periods.reduce((sum, p) => sum + p.count, 0) || 1;
+    const peakHours = {
+      periods: periods.map(p => ({
+        period: p.label,
+        count: p.count,
+        percentage: Math.round((p.count / finalTotal) * 100)
+      })),
+      hourly: hourlyCounts
+    };
+
     return {
       menuCoverage: {
         totalItems,
@@ -158,7 +268,8 @@ export class MerchantInsightService {
       attributeDistribution: attributesMap,
       topDishes,
       customerSegments,
-      gapAnalysis
+      gapAnalysis,
+      peakHours
     };
   }
 }

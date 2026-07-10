@@ -97,13 +97,33 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       .json({ message: "Thiếu name/price/category khi thêm món" });
   }
 
+  let resolvedCategoryId = categoryId;
+  const trimmedCategoryName = category.trim();
+
+  try {
+    const { Category } = await import("../models/Category.js");
+    let catDoc = await Category.findOne({
+      restaurantId,
+      name: { $regex: new RegExp(`^${trimmedCategoryName}$`, "i") }
+    });
+    if (!catDoc) {
+      catDoc = await Category.create({
+        restaurantId,
+        name: trimmedCategoryName
+      });
+    }
+    resolvedCategoryId = catDoc._id;
+  } catch (catErr) {
+    console.error("Lỗi khi đồng bộ danh mục:", catErr);
+  }
+
   const item = await MenuItem.create({
     restaurantId,
     name,
     description,
     price,
-    category,
-    categoryId,
+    category: trimmedCategoryName,
+    categoryId: resolvedCategoryId,
     imageUrl,
     available: available ?? true,
     ingredients: ingredients ?? [],
@@ -159,8 +179,31 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (name !== undefined) update.name = name;
   if (description !== undefined) update.description = description;
   if (price !== undefined) update.price = price;
-  if (category !== undefined) update.category = category;
-  if (categoryId !== undefined) update.categoryId = categoryId;
+  
+  if (category !== undefined) {
+    const trimmedCategoryName = category.trim();
+    try {
+      const { Category } = await import("../models/Category.js");
+      let catDoc = await Category.findOne({
+        restaurantId,
+        name: { $regex: new RegExp(`^${trimmedCategoryName}$`, "i") }
+      });
+      if (!catDoc) {
+        catDoc = await Category.create({
+          restaurantId,
+          name: trimmedCategoryName
+        });
+      }
+      update.category = trimmedCategoryName;
+      update.categoryId = catDoc._id;
+    } catch (catErr) {
+      console.error("Lỗi khi đồng bộ danh mục:", catErr);
+      update.category = trimmedCategoryName;
+    }
+  } else if (categoryId !== undefined) {
+    update.categoryId = categoryId;
+  }
+
   if (imageUrl !== undefined) update.imageUrl = imageUrl;
   if (available !== undefined) update.available = available;
   if (ingredients !== undefined) update.ingredients = ingredients;
