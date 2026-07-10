@@ -5,6 +5,9 @@ import multer from "multer";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { User, UserRole } from "../models/User.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
+import { Order, OrderStatus } from "../models/Order.js";
+import { Category } from "../models/Category.js";
+import { MenuItem } from "../models/MenuItem.js";
 import {
   deleteCloudinaryImage,
   isCloudinaryConfigured,
@@ -208,10 +211,62 @@ router.get("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), a
       console.error("Lỗi khi tải cấu hình gói của owner:", err);
     }
 
-    const restaurantsWithFeatures = restaurants.map(r => ({
-      ...r.toObject(),
-      features: planFeatures
-    }));
+    const { period = "all" } = req.query as { period?: string };
+
+    // Tính doanh thu và số lượng đơn hàng cho từng nhà hàng
+    const restaurantIds = restaurants.map(r => r._id);
+    
+    const now = new Date();
+    let start: Date | undefined;
+    let end: Date | undefined = new Date(now);
+    end.setHours(23, 59, 59, 999);
+
+    if (period === 'today') {
+      start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'week') {
+      const dayOfWeek = now.getDay();
+      const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Monday
+      start = new Date(now.setDate(diff));
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      start.setHours(0, 0, 0, 0);
+    } else if (period === 'year') {
+      start = new Date(now.getFullYear(), 0, 1);
+      start.setHours(0, 0, 0, 0);
+    } else {
+      start = undefined;
+      end = undefined;
+    }
+
+    const orderQuery: any = {
+      restaurantId: { $in: restaurantIds },
+      status: { $in: [OrderStatus.COMPLETED, OrderStatus.SERVED] }
+    };
+    if (start && end) {
+      orderQuery.createdAt = { $gte: start, $lte: end };
+    }
+
+    const orders = await Order.find(orderQuery);
+
+    const revenueByRestaurant = new Map<string, number>();
+    const orderCountByRestaurant = new Map<string, number>();
+    orders.forEach(order => {
+      const rId = order.restaurantId.toString();
+      revenueByRestaurant.set(rId, (revenueByRestaurant.get(rId) || 0) + order.totalAmount);
+      orderCountByRestaurant.set(rId, (orderCountByRestaurant.get(rId) || 0) + 1);
+    });
+
+    const restaurantsWithFeatures = restaurants.map(r => {
+      const rId = r._id.toString();
+      return {
+        ...r.toObject(),
+        features: planFeatures,
+        revenue: revenueByRestaurant.get(rId) || 0,
+        orderCount: orderCountByRestaurant.get(rId) || 0
+      };
+    });
 
     res.json(restaurantsWithFeatures);
   } catch (error) {
@@ -361,6 +416,105 @@ router.get("/:id", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string)
   } catch (error) {
     console.error("Lỗi khi lấy thông tin chi tiết nhà hàng:", error);
     res.status(500).json({ message: "Đã xảy ra lỗi hệ thống", error });
+  }
+});
+
+// 4. Sao chép thực đơn từ một chi nhánh cũ sang chi nhánh mới
+router.post("/:restaurantId/copy-menu", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
+  try {
+    const ownerId = req.auth?.sub;
+    const { restaurantId } = req.params; // Target restaurant
+    const { sourceRestaurantId } = req.body; // Source restaurant
+
+    if (!ownerId) {
+      return res.status(403).json({ message: "Không xác định được thông tin chủ sở hữu" });
+    }
+
+    if (!mongoose.isValidObjectId(restaurantId) || !mongoose.isValidObjectId(sourceRestaurantId)) {
+      return res.status(400).json({ message: "Mã nhà hàng không hợp lệ" });
+    }
+
+    if (restaurantId === sourceRestaurantId) {
+      return res.status(400).json({ message: "Không thể sao chép thực đơn của chính nó" });
+    }
+
+    // Verify that both target and source restaurants belong to the owner
+    const sourceRest = await Restaurant.findOne({
+      _id: sourceRestaurantId,
+      ownerId: new mongoose.Types.ObjectId(ownerId)
+    });
+    const targetRest = await Restaurant.findOne({
+      _id: restaurantId,
+      ownerId: new mongoose.Types.ObjectId(ownerId)
+    });
+
+    if (!sourceRest || !targetRest) {
+      return res.status(404).json({
+        message: "Không tìm thấy chi nhánh hoặc bạn không có quyền truy cập"
+      });
+    }
+
+    // 1. Fetch source & target categories
+    const sourceCategories = await Category.find({ restaurantId: sourceRestaurantId });
+    const targetCategories = await Category.find({ restaurantId: restaurantId });
+
+    // Create a map for Category ID mapping: sourceCategoryId -> targetCategoryId
+    const categoryIdMap = new Map<string, string>();
+
+    // 2. Process Categories
+    for (const srcCat of sourceCategories) {
+      const existingCat = targetCategories.find(
+        tc => tc.name.trim().toLowerCase() === srcCat.name.trim().toLowerCase()
+      );
+
+      if (existingCat) {
+        categoryIdMap.set(srcCat._id.toString(), existingCat._id.toString());
+      } else {
+        const newCat = await Category.create({
+          restaurantId: new mongoose.Types.ObjectId(restaurantId),
+          name: srcCat.name
+        });
+        categoryIdMap.set(srcCat._id.toString(), newCat._id.toString());
+      }
+    }
+
+    // 3. Fetch source menu items
+    const sourceMenuItems = await MenuItem.find({ restaurantId: sourceRestaurantId });
+
+    const duplicatedItems = sourceMenuItems.map(item => {
+      const itemObj = item.toObject() as any;
+      delete itemObj._id;
+      delete itemObj.id;
+      delete itemObj.createdAt;
+      delete itemObj.updatedAt;
+
+      itemObj.restaurantId = new mongoose.Types.ObjectId(restaurantId);
+      
+      if (itemObj.categoryId) {
+        const mappedId = categoryIdMap.get(itemObj.categoryId.toString());
+        if (mappedId) {
+          itemObj.categoryId = new mongoose.Types.ObjectId(mappedId);
+        } else {
+          delete itemObj.categoryId;
+        }
+      }
+      
+      return itemObj;
+    });
+
+    if (duplicatedItems.length > 0) {
+      await MenuItem.insertMany(duplicatedItems);
+    }
+
+    res.json({
+      success: true,
+      message: `Đã sao chép thành công ${sourceCategories.length} danh mục và ${duplicatedItems.length} món ăn.`,
+      copiedCategories: sourceCategories.length,
+      copiedMenuItems: duplicatedItems.length
+    });
+  } catch (error) {
+    console.error("Lỗi khi sao chép thực đơn:", error);
+    res.status(500).json({ message: "Đã xảy ra lỗi khi sao chép thực đơn", error });
   }
 });
 

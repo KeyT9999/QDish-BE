@@ -34,7 +34,8 @@ router.get("/insights", requireAuth, async (req: AuthRequest, res) => {
       return res.status(403).json({ message: "Tính năng phân tích dữ liệu thực khách (Customer Insights) không khả dụng cho gói dịch vụ của bạn. Vui lòng nâng cấp lên gói PLUS trở lên." });
     }
 
-    const insights = await MerchantInsightService.getInsights(restaurantId.toString());
+    const period = (req.query.period as string) || "all";
+    const insights = await MerchantInsightService.getInsights(restaurantId.toString(), period);
     return res.json(insights);
   } catch (error: any) {
     console.error("Error fetching merchant insights:", error);
