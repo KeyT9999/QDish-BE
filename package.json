@@ -13,6 +13,7 @@
     "test:merchant-insight-isolation": "tsx src/tests/merchantInsightIsolation.test.ts",
     "test:insight-entitlements": "tsx src/tests/insightEntitlements.test.ts",
     "test:food-attribute-entitlements": "tsx src/tests/foodAttributeEntitlements.test.ts",
+    "test:batch-fit-score": "tsx src/tests/batchFitScoreService.test.ts",
     "start": "node dist/index.js",
     "seed:super-admin": "tsx src/scripts/createSuperAdmin.ts",
     "seed:plans": "tsx src/scripts/seedPlans.ts",
