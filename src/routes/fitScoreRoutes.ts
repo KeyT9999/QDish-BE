@@ -117,7 +117,7 @@ export const createBatchFitScoreHandler = (
   try {
     const ownerId = await dependencies.resolveOwnerByRestaurant(req.body.restaurantId);
     if (!ownerId) {
-      return res.status(404).json({ message: "KhÃ´ng tÃ¬m tháº¥y thÃ´ng tin nhÃ  hÃ ng hoáº·c chá»§ sá»Ÿ há»¯u." });
+      return res.status(404).json({ message: "Không tìm thấy thông tin nhà hàng hoặc chủ sở hữu." });
     }
 
     const { plan } = await dependencies.getPlanLimits(ownerId);
@@ -134,7 +134,7 @@ export const createBatchFitScoreHandler = (
     return res.json({ scores });
   } catch (error) {
     console.error("Error calculating batch fit scores:", error);
-    return res.status(500).json({ message: "Lá»—i há»‡ thá»‘ng khi tÃ­nh Fit Score." });
+    return res.status(500).json({ message: "Lỗi hệ thống khi tính Fit Score." });
   }
 };
 

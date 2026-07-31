@@ -191,9 +191,9 @@ const routeRestaurantId = "507f1f77bcf86cd799439011";
 const expectedScores = {
   "507f1f77bcf86cd799439013": {
     score: 92,
-    label: "Ráº¥t phÃ¹ há»£p",
+    label: "Rất phù hợp",
     contextType: "gym_fit",
-    reasons: ["Há»— trá»£ má»¥c tiÃªu MUSCLE_GAIN"],
+    reasons: ["Hỗ trợ mục tiêu MUSCLE_GAIN"],
     blocked: false,
   },
 };
