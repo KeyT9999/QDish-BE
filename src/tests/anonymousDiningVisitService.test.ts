@@ -8,6 +8,7 @@ import {
   type AnonymousDiningVisitDependencies,
   type RecordAnonymousDiningVisitInput
 } from "../services/anonymousDiningVisitService.js";
+import { createAnonymousDiningVisitHandler } from "../routes/anonymousDiningVisitRoutes.js";
 
 const restaurantA = new mongoose.Types.ObjectId();
 const restaurantB = new mongoose.Types.ObjectId();
@@ -150,12 +151,62 @@ async function testRejectsInvalidBoundaryInput() {
   );
 }
 
+async function testHttpHandlerUsesStableSuccessAndErrorResponses() {
+  const makeResponse = () => {
+    const state: { statusCode?: number; body?: unknown } = {};
+    return {
+      state,
+      response: {
+        status(statusCode: number) {
+          state.statusCode = statusCode;
+          return this;
+        },
+        json(body: unknown) {
+          state.body = body;
+          return this;
+        }
+      }
+    };
+  };
+
+  const createdResponse = makeResponse();
+  await createAnonymousDiningVisitHandler(async () => ({
+    id: new mongoose.Types.ObjectId().toString(),
+    recordedAt: new Date("2026-07-31T10:00:00.000Z"),
+    created: true
+  }))({ params: { restaurantId: restaurantA.toString() }, body: validInput() } as any, createdResponse.response as any);
+  assert.equal(createdResponse.state.statusCode, 201);
+  assert.equal((createdResponse.state.body as any).created, true);
+
+  const updatedResponse = makeResponse();
+  await createAnonymousDiningVisitHandler(async () => ({
+    id: new mongoose.Types.ObjectId().toString(),
+    recordedAt: new Date("2026-07-31T10:00:00.000Z"),
+    created: false
+  }))({ params: { restaurantId: restaurantA.toString() }, body: validInput() } as any, updatedResponse.response as any);
+  assert.equal(updatedResponse.state.statusCode, 200);
+  assert.equal((updatedResponse.state.body as any).created, false);
+
+  const errorResponse = makeResponse();
+  await createAnonymousDiningVisitHandler(async () => {
+    throw new AnonymousDiningVisitServiceError(409, "TABLE_SESSION_INACTIVE", "Phiên bàn không còn hoạt động");
+  })({ params: { restaurantId: restaurantA.toString() }, body: validInput() } as any, errorResponse.response as any);
+  assert.equal(errorResponse.state.statusCode, 409);
+  assert.deepEqual(errorResponse.state.body, {
+    error: {
+      code: "TABLE_SESSION_INACTIVE",
+      message: "Phiên bàn không còn hoạt động"
+    }
+  });
+}
+
 async function run() {
   await testCreatesAndIdempotentlyUpdatesAVisit();
   await testAllowsMultipleSurveyResponsesInOneTableSession();
   await testRejectsCrossTenantSession();
   await testRejectsInactiveSession();
   await testRejectsInvalidBoundaryInput();
+  await testHttpHandlerUsesStableSuccessAndErrorResponses();
   console.log("anonymous dining visit service tests passed");
 }
 
