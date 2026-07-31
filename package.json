@@ -11,6 +11,7 @@
     "test:ingredients": "tsx src/tests/ingredientsCRUD.test.ts",
     "test:anonymous-dining": "tsx src/tests/anonymousDiningVisitService.test.ts",
     "test:merchant-insight-isolation": "tsx src/tests/merchantInsightIsolation.test.ts",
+    "test:insight-entitlements": "tsx src/tests/insightEntitlements.test.ts",
     "start": "node dist/index.js",
     "seed:super-admin": "tsx src/scripts/createSuperAdmin.ts",
     "seed:plans": "tsx src/scripts/seedPlans.ts",
