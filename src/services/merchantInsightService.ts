@@ -1,7 +1,7 @@
 import { MenuItem } from "../models/MenuItem.js";
 import { Order } from "../models/Order.js";
-import { UserDiningProfile } from "../models/UserDiningProfile.js";
 import { DishNutritionProfile } from "../models/DishNutritionProfile.js";
+import { AnonymousDiningVisit } from "../models/AnonymousDiningVisit.js";
 import mongoose from "mongoose";
 
 export interface MerchantInsights {
@@ -32,6 +32,53 @@ export interface MerchantInsights {
     hourly: number[];
   };
 }
+
+const CUSTOMER_SEGMENT_LABELS: Record<string, string> = {
+  MUSCLE_GAIN: "Ăn tăng cơ 💪",
+  BALANCED: "Ăn cân bằng ⚖️",
+  LIGHT_MEAL: "Ăn rau củ / Ít calo 🥗",
+  ENERGY_BOOST: "Ăn lấy năng lượng ⚡",
+  COMFORT: "Ăn thưởng thức 🫶",
+  WEIGHT_LOSS: "Ăn giảm béo 🎯"
+};
+
+export const buildDiningVisitQuery = (
+  restaurantId: string,
+  start?: Date,
+  end?: Date
+): Record<string, unknown> => {
+  const query: Record<string, unknown> = {
+    restaurantId: new mongoose.Types.ObjectId(restaurantId)
+  };
+  if (start && end) {
+    query.recordedAt = { $gte: start, $lte: end };
+  }
+  return query;
+};
+
+export const aggregateCustomerSegments = (
+  visits: Array<{ goalsSnapshot?: string[] }>
+): MerchantInsights["customerSegments"] => {
+  const counts = Object.fromEntries(
+    Object.keys(CUSTOMER_SEGMENT_LABELS).map((segment) => [segment, 0])
+  ) as Record<string, number>;
+
+  for (const visit of visits) {
+    for (const goal of visit.goalsSnapshot || []) {
+      if (goal in counts) {
+        counts[goal] += 1;
+      }
+    }
+  }
+
+  return Object.entries(counts)
+    .map(([segment, count]) => ({
+      segment,
+      count,
+      label: CUSTOMER_SEGMENT_LABELS[segment]
+    }))
+    .sort((a, b) => b.count - a.count);
+};
 
 export class MerchantInsightService {
   /**
@@ -121,55 +168,11 @@ export class MerchantInsightService {
       .sort((a, b) => b.orderCount - a.orderCount)
       .slice(0, 5);
 
-    // 4. Customer segments (Dining Goals from active users)
-    const profileQuery: any = {};
-    if (start && end) {
-      profileQuery.updatedAt = { $gte: start, $lte: end };
-    }
-    const recentProfiles = await UserDiningProfile.find(profileQuery).limit(200).lean();
-    const segmentsMap: Record<string, number> = {};
-    
-    // Seed default goals if database is empty of users
-    segmentsMap["MUSCLE_GAIN"] = 0;
-    segmentsMap["BALANCED"] = 0;
-    segmentsMap["LIGHT_MEAL"] = 0;
-    segmentsMap["ENERGY_BOOST"] = 0;
-    segmentsMap["COMFORT"] = 0;
-    segmentsMap["WEIGHT_LOSS"] = 0;
-
-    for (const prof of recentProfiles) {
-      if (prof.goals && prof.goals.length > 0) {
-        for (const g of prof.goals) {
-          segmentsMap[g] = (segmentsMap[g] || 0) + 1;
-        }
-      }
-    }
-
-    const labelMap: Record<string, string> = {
-      MUSCLE_GAIN: "Ăn tăng cơ 💪",
-      BALANCED: "Ăn cân bằng ⚖️",
-      LIGHT_MEAL: "Ăn rau củ / Ít calo 🥗",
-      ENERGY_BOOST: "Ăn lấy năng lượng ⚡",
-      COMFORT: "Ăn thưởng thức 🫶",
-      WEIGHT_LOSS: "Ăn giảm béo 🎯"
-    };
-
-    // Fallback/Simulated data if restaurant is completely new with no profile scans
-    const totalScans = recentProfiles.length;
-    if (totalScans < 3) {
-      segmentsMap["MUSCLE_GAIN"] += 12;
-      segmentsMap["BALANCED"] += 18;
-      segmentsMap["LIGHT_MEAL"] += 15;
-      segmentsMap["ENERGY_BOOST"] += 8;
-      segmentsMap["COMFORT"] += 10;
-      segmentsMap["WEIGHT_LOSS"] += 14;
-    }
-
-    const customerSegments = Object.entries(segmentsMap).map(([key, val]) => ({
-      segment: key,
-      count: val,
-      label: labelMap[key] || key
-    })).sort((a, b) => b.count - a.count);
+    // 4. Customer segments from anonymous surveys scoped to this restaurant
+    const recentVisits = await AnonymousDiningVisit.find(
+      buildDiningVisitQuery(restaurantId, start, end)
+    ).select("goalsSnapshot").lean();
+    const customerSegments = aggregateCustomerSegments(recentVisits);
 
     // 5. Smart Gap Analysis (AI Advice)
     const gapAnalysis: string[] = [];
