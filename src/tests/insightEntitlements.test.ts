@@ -99,7 +99,7 @@ async function testPlusCannotCallCustomerOrLegacyInsights() {
   }
 }
 
-async function testProReceivesOnlyCustomerInsightFields() {
+async function testProReceivesTheCompleteInsightDashboard() {
   const pro = makeDependencies({
     personalizedMenuEnabled: true,
     customerInsightsEnabled: true
@@ -112,18 +112,13 @@ async function testProReceivesOnlyCustomerInsightFields() {
   );
 
   assert.equal(result.state.statusCode, 200);
-  assert.deepEqual(Object.keys(result.state.body as object).sort(), [
-    "customerSegments",
-    "gapAnalysis",
-    "peakHours",
-    "surveyResponseCount"
-  ]);
+  assert.deepEqual(result.state.body, completeInsights);
 }
 
 async function run() {
   await testPlusCanOnlyReceiveMenuInsights();
   await testPlusCannotCallCustomerOrLegacyInsights();
-  await testProReceivesOnlyCustomerInsightFields();
+  await testProReceivesTheCompleteInsightDashboard();
   console.log("insight entitlement tests passed");
 }
 

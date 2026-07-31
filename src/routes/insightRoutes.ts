@@ -47,15 +47,6 @@ const selectInsightPayload = (
     };
   }
 
-  if (scope === "customer") {
-    return {
-      customerSegments: insights.customerSegments,
-      surveyResponseCount: insights.surveyResponseCount,
-      gapAnalysis: insights.gapAnalysis,
-      peakHours: insights.peakHours
-    };
-  }
-
   return insights;
 };
 
