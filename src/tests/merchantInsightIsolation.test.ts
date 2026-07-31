@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 
 import {
   aggregateCustomerSegments,
+  buildCustomerSegmentsFromCounts,
   buildDiningVisitQuery,
   countDiningVisitResponses
 } from "../services/merchantInsightService.js";
@@ -53,11 +54,23 @@ function testCountsSurveyResponsesSeparatelyFromGoalSelections() {
   );
 }
 
+function testBuildsSegmentsFromDatabaseAggregationRows() {
+  const segments = buildCustomerSegmentsFromCounts([
+    { _id: "BALANCED", count: 2 },
+    { _id: "LIGHT_MEAL", count: 1 }
+  ]);
+
+  assert.equal(segments.find((segment) => segment.segment === "BALANCED")?.count, 2);
+  assert.equal(segments.find((segment) => segment.segment === "LIGHT_MEAL")?.count, 1);
+  assert.equal(segments.find((segment) => segment.segment === "MUSCLE_GAIN")?.count, 0);
+}
+
 function run() {
   testBuildsRestaurantScopedQuery();
   testAggregatesSurveySelections();
   testEmptyVisitsReturnRealZeroValues();
   testCountsSurveyResponsesSeparatelyFromGoalSelections();
+  testBuildsSegmentsFromDatabaseAggregationRows();
   console.log("merchant insight isolation tests passed");
 }
 

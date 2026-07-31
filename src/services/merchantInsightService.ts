@@ -60,15 +60,31 @@ export const buildDiningVisitQuery = (
 export const aggregateCustomerSegments = (
   visits: Array<{ goalsSnapshot?: string[] }>
 ): MerchantInsights["customerSegments"] => {
+  const counts: Record<string, number> = {};
+
+  for (const visit of visits) {
+    for (const goal of visit.goalsSnapshot || []) {
+      if (goal in CUSTOMER_SEGMENT_LABELS) {
+        counts[goal] = (counts[goal] || 0) + 1;
+      }
+    }
+  }
+
+  return buildCustomerSegmentsFromCounts(
+    Object.entries(counts).map(([_id, count]) => ({ _id, count }))
+  );
+};
+
+export const buildCustomerSegmentsFromCounts = (
+  rows: Array<{ _id: string; count: number }>
+): MerchantInsights["customerSegments"] => {
   const counts = Object.fromEntries(
     Object.keys(CUSTOMER_SEGMENT_LABELS).map((segment) => [segment, 0])
   ) as Record<string, number>;
 
-  for (const visit of visits) {
-    for (const goal of visit.goalsSnapshot || []) {
-      if (goal in counts) {
-        counts[goal] += 1;
-      }
+  for (const row of rows) {
+    if (row._id in counts) {
+      counts[row._id] = row.count;
     }
   }
 
@@ -174,11 +190,16 @@ export class MerchantInsightService {
       .slice(0, 5);
 
     // 4. Customer segments from anonymous surveys scoped to this restaurant
-    const recentVisits = await AnonymousDiningVisit.find(
-      buildDiningVisitQuery(restaurantId, start, end)
-    ).select("goalsSnapshot").lean();
-    const customerSegments = aggregateCustomerSegments(recentVisits);
-    const surveyResponseCount = countDiningVisitResponses(recentVisits);
+    const diningVisitQuery = buildDiningVisitQuery(restaurantId, start, end);
+    const [surveyResponseCount, segmentCounts] = await Promise.all([
+      AnonymousDiningVisit.countDocuments(diningVisitQuery),
+      AnonymousDiningVisit.aggregate<{ _id: string; count: number }>([
+        { $match: diningVisitQuery },
+        { $unwind: "$goalsSnapshot" },
+        { $group: { _id: "$goalsSnapshot", count: { $sum: 1 } } }
+      ])
+    ]);
+    const customerSegments = buildCustomerSegmentsFromCounts(segmentCounts);
 
     // 5. Smart Gap Analysis (AI Advice)
     const gapAnalysis: string[] = [];

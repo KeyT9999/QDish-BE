@@ -13,6 +13,7 @@ import { createAnonymousDiningVisitHandler } from "../routes/anonymousDiningVisi
 const restaurantA = new mongoose.Types.ObjectId();
 const restaurantB = new mongoose.Types.ObjectId();
 const openSessionId = new mongoose.Types.ObjectId();
+const secondOpenSessionId = new mongoose.Types.ObjectId();
 const closedSessionId = new mongoose.Types.ObjectId();
 const visitTokenA = "5b9c6d8e-8ac1-4fc7-a11d-889e603fa888";
 const visitTokenB = "84d5f623-3d71-4b62-8ad2-4959725233c7";
@@ -39,6 +40,13 @@ const createDependencies = () => {
       if (tableSessionId.equals(openSessionId)) {
         return {
           _id: openSessionId,
+          restaurantId: restaurantA,
+          status: TableSessionStatus.OPEN
+        };
+      }
+      if (tableSessionId.equals(secondOpenSessionId)) {
+        return {
+          _id: secondOpenSessionId,
           restaurantId: restaurantA,
           status: TableSessionStatus.OPEN
         };
@@ -96,6 +104,20 @@ async function testAllowsMultipleSurveyResponsesInOneTableSession() {
 
   const first = await recordAnonymousDiningVisit(validInput(), deps);
   const second = await recordAnonymousDiningVisit(validInput({ visitToken: visitTokenB }), deps);
+
+  assert.equal(first.created, true);
+  assert.equal(second.created, true);
+  assert.notEqual(first.id, second.id);
+  assert.equal(visits.size, 2);
+}
+
+async function testSameTokenInDifferentSessionsCreatesSeparateVisits() {
+  const { deps, visits } = createDependencies();
+
+  const first = await recordAnonymousDiningVisit(validInput(), deps);
+  const second = await recordAnonymousDiningVisit(validInput({
+    tableSessionId: secondOpenSessionId.toString()
+  }), deps);
 
   assert.equal(first.created, true);
   assert.equal(second.created, true);
@@ -203,6 +225,7 @@ async function testHttpHandlerUsesStableSuccessAndErrorResponses() {
 async function run() {
   await testCreatesAndIdempotentlyUpdatesAVisit();
   await testAllowsMultipleSurveyResponsesInOneTableSession();
+  await testSameTokenInDifferentSessionsCreatesSeparateVisits();
   await testRejectsCrossTenantSession();
   await testRejectsInactiveSession();
   await testRejectsInvalidBoundaryInput();
