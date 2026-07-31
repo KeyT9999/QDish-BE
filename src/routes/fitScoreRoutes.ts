@@ -47,7 +47,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasOnlyAllowedValues(value: unknown, allowedValues: Set<string>): value is string[] {
   return Array.isArray(value)
     && value.length <= 10
-    && value.every((item) => typeof item === "string" && allowedValues.has(item));
+    && value.every((item) => typeof item === "string" && allowedValues.has(item))
+    && new Set(value).size === value.length;
 }
 
 function isValidBatchFitScoreInput(value: unknown): value is BatchFitScoreInput {

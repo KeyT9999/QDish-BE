@@ -4,6 +4,7 @@ import {
   BatchFitScoreDependencies,
   calculateBatchFitScores,
 } from "../services/batchFitScoreService.js";
+import { FitScoreEngine } from "../engines/fitScore/FitScoreEngine.js";
 import { createBatchFitScoreHandler } from "../routes/fitScoreRoutes.js";
 
 const restaurantAId = new mongoose.Types.ObjectId();
@@ -157,7 +158,7 @@ const allergenDependencies: BatchFitScoreDependencies = {
         sugar: 2,
         sodium: 250,
         attributes: ["HIGH_PROTEIN"],
-        allergens: ["soy"],
+        allergens: [],
         nutritionConfidence: 1,
       },
     ];
@@ -234,7 +235,7 @@ function validBatchInput() {
 function makeBatchRouteDependencies(plan: {
   fitScoreEnabled: boolean;
   recommendationEnabled: boolean;
-}) {
+} | null) {
   let calculateCalls = 0;
   return {
     dependencies: {
@@ -284,6 +285,23 @@ async function testFitScoreRequiresItsOwnEntitlement() {
   assert.equal(enabledResponse.state.statusCode, 200);
   assert.deepEqual(enabledResponse.state.body, { scores: expectedScores });
   assert.equal(enabled.calculateCalls(), 1);
+
+  const missingPlan = makeBatchRouteDependencies(null);
+  const missingPlanResponse = makeBatchResponse();
+
+  await createBatchFitScoreHandler(missingPlan.dependencies as any)(
+    makeBatchRequest(validBatchInput()) as any,
+    missingPlanResponse.response as any
+  );
+
+  assert.equal(missingPlanResponse.state.statusCode, 403);
+  assert.deepEqual(missingPlanResponse.state.body, {
+    error: {
+      code: "FIT_SCORE_NOT_AVAILABLE",
+      message: "Fit Score kh\u00f4ng kh\u1ea3 d\u1ee5ng cho g\u00f3i d\u1ecbch v\u1ee5 n\u00e0y",
+    },
+  });
+  assert.equal(missingPlan.calculateCalls(), 0);
 }
 
 async function testBatchRouteRejectsInvalidRequests() {
@@ -313,6 +331,18 @@ async function testBatchRouteRejectsInvalidRequests() {
       ...validBatchInput(),
       userProfile: { ...validBatchInput().userProfile, allergies: ["NOT_AN_ALLERGY"] },
     },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, goals: ["MUSCLE_GAIN", "MUSCLE_GAIN"] },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, preferences: ["HIGH_PROTEIN", "HIGH_PROTEIN"] },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, allergies: ["SOY", "SOY"] },
+    },
     { ...validBatchInput(), context: { timeOfDay: "midnight_snack" } },
     { ...validBatchInput(), context: { postWorkout: "false" } },
     { ...validBatchInput(), context: { weather: "stormy" } },
@@ -341,6 +371,12 @@ async function testBatchRouteRejectsInvalidRequests() {
     assert.equal(route.calculateCalls(), 0);
   }
 }
+
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: ["LIGHT_MEAL"],
+  preferences: [],
+  allergies: [],
+}), "quick_lunch_fit");
 
 await testFitScoreRequiresItsOwnEntitlement();
 await testBatchRouteRejectsInvalidRequests();

@@ -83,6 +83,23 @@ function labelForScore(score: number): string {
   return "Có thể cân nhắc";
 }
 
+function unionCaseInsensitive(...values: Array<string[] | undefined>): string[] {
+  const seen = new Set<string>();
+  const union: string[] = [];
+
+  for (const value of values) {
+    for (const item of value ?? []) {
+      const key = item.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        union.push(item);
+      }
+    }
+  }
+
+  return union;
+}
+
 function nutritionFor(
   dish: BatchMenuItem,
   profile?: BatchNutritionProfile
@@ -98,7 +115,7 @@ function nutritionFor(
     sugar: profile?.sugar ?? dish.sugar ?? 0,
     sodium: profile?.sodium ?? dish.sodium ?? 0,
     attributes,
-    allergens: profile?.allergens ?? dish.allergens ?? [],
+    allergens: unionCaseInsensitive(profile?.allergens, dish.allergens),
     nutritionConfidence: profile?.nutritionConfidence ?? 1,
   };
 }
