@@ -56,21 +56,8 @@ export class RecommendationEngine {
       profileMap.set(p.dishId.toString(), p as any);
     }
 
-    // Determine the primary fit context type based on the user's goals
-    let primaryGoalType = "office_lunch_fit";
-    if (userProfile && userProfile.goals && userProfile.goals.length > 0) {
-      if (userProfile.goals.includes("MUSCLE_GAIN")) {
-        primaryGoalType = "gym_fit";
-      } else if (userProfile.goals.includes("WEIGHT_LOSS")) {
-        primaryGoalType = "quick_lunch_fit"; // calorie thâm hụt / nhẹ nhàng
-      } else if (userProfile.goals.includes("LIGHT_MEAL")) {
-        primaryGoalType = "office_lunch_fit";
-      } else if (userProfile.goals.includes("ENERGY_BOOST")) {
-        primaryGoalType = "energy_boost_fit";
-      } else if (userProfile.goals.includes("COMFORT")) {
-        primaryGoalType = "late_night_fit";
-      }
-    }
+    const primaryGoalType =
+      FitScoreEngine.resolvePrimaryScoreType(userProfile) ?? "office_lunch_fit";
 
     const scoredItems: RecommendedDish[] = [];
     const fullMenuItemsWithScores: any[] = [];

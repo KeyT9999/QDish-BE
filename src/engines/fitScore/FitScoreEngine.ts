@@ -35,6 +35,16 @@ export class FitScoreEngine {
     date_night_fit: "Date Night Fit",
   };
 
+  public static resolvePrimaryScoreType(profile?: UserDiningProfile): string | undefined {
+    const goals = profile?.goals ?? [];
+    if (goals.includes("MUSCLE_GAIN")) return "gym_fit";
+    if (goals.includes("WEIGHT_LOSS") || goals.includes("LIGHT_MEAL")) return "quick_lunch_fit";
+    if (goals.includes("ENERGY_BOOST")) return "energy_boost_fit";
+    if (goals.includes("COMFORT")) return "late_night_fit";
+    if (goals.includes("BALANCED")) return "office_lunch_fit";
+    return undefined;
+  }
+
   /**
    * Calculates a base score (0-100) based strictly on nutrition metrics and matched attributes.
    */
