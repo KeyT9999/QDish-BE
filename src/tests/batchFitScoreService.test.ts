@@ -4,6 +4,7 @@ import {
   BatchFitScoreDependencies,
   calculateBatchFitScores,
 } from "../services/batchFitScoreService.js";
+import { createBatchFitScoreHandler } from "../routes/fitScoreRoutes.js";
 
 const restaurantAId = new mongoose.Types.ObjectId();
 const restaurantBDishId = new mongoose.Types.ObjectId();
@@ -185,5 +186,163 @@ assert.deepEqual(allergenScores[soyDishId.toString()], {
   blocked: true,
   blockReason: "allergen",
 });
+
+const routeRestaurantId = "507f1f77bcf86cd799439011";
+const expectedScores = {
+  "507f1f77bcf86cd799439013": {
+    score: 92,
+    label: "Ráº¥t phÃ¹ há»£p",
+    contextType: "gym_fit",
+    reasons: ["Há»— trá»£ má»¥c tiÃªu MUSCLE_GAIN"],
+    blocked: false,
+  },
+};
+
+function makeBatchRequest(body: unknown) {
+  return { body };
+}
+
+function makeBatchResponse() {
+  const state: { statusCode: number; body?: unknown } = { statusCode: 200 };
+  return {
+    state,
+    response: {
+      status(code: number) {
+        state.statusCode = code;
+        return this;
+      },
+      json(body: unknown) {
+        state.body = body;
+        return this;
+      },
+    },
+  };
+}
+
+function validBatchInput() {
+  return {
+    restaurantId: routeRestaurantId,
+    userProfile: {
+      goals: ["MUSCLE_GAIN"],
+      allergies: ["SOY"],
+      preferences: ["HIGH_PROTEIN"],
+    },
+    context: { timeOfDay: "lunch", postWorkout: true },
+  };
+}
+
+function makeBatchRouteDependencies(plan: {
+  fitScoreEnabled: boolean;
+  recommendationEnabled: boolean;
+}) {
+  let calculateCalls = 0;
+  return {
+    dependencies: {
+      resolveOwnerByRestaurant: async () => "owner-1",
+      getPlanLimits: async () => ({ plan }),
+      calculateBatchFitScores: async () => {
+        calculateCalls += 1;
+        return expectedScores;
+      },
+    },
+    calculateCalls: () => calculateCalls,
+  };
+}
+
+async function testFitScoreRequiresItsOwnEntitlement() {
+  const disabled = makeBatchRouteDependencies({
+    fitScoreEnabled: false,
+    recommendationEnabled: true,
+  });
+  const disabledResponse = makeBatchResponse();
+
+  await createBatchFitScoreHandler(disabled.dependencies as any)(
+    makeBatchRequest(validBatchInput()) as any,
+    disabledResponse.response as any
+  );
+
+  assert.equal(disabledResponse.state.statusCode, 403);
+  assert.deepEqual(disabledResponse.state.body, {
+    error: {
+      code: "FIT_SCORE_NOT_AVAILABLE",
+      message: "Fit Score không khả dụng cho gói dịch vụ này",
+    },
+  });
+  assert.equal(disabled.calculateCalls(), 0);
+
+  const enabled = makeBatchRouteDependencies({
+    fitScoreEnabled: true,
+    recommendationEnabled: false,
+  });
+  const enabledResponse = makeBatchResponse();
+
+  await createBatchFitScoreHandler(enabled.dependencies as any)(
+    makeBatchRequest(validBatchInput()) as any,
+    enabledResponse.response as any
+  );
+
+  assert.equal(enabledResponse.state.statusCode, 200);
+  assert.deepEqual(enabledResponse.state.body, { scores: expectedScores });
+  assert.equal(enabled.calculateCalls(), 1);
+}
+
+async function testBatchRouteRejectsInvalidRequests() {
+  const invalidBodies = [
+    { ...validBatchInput(), restaurantId: "not-an-object-id" },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, goals: Array(11).fill("MUSCLE_GAIN") },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, allergies: Array(11).fill("SOY") },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, preferences: Array(11).fill("HIGH_PROTEIN") },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, goals: ["NOT_A_GOAL"] },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, preferences: ["NOT_A_PREFERENCE"] },
+    },
+    {
+      ...validBatchInput(),
+      userProfile: { ...validBatchInput().userProfile, allergies: ["NOT_AN_ALLERGY"] },
+    },
+    { ...validBatchInput(), context: { timeOfDay: "midnight_snack" } },
+    { ...validBatchInput(), context: { postWorkout: "false" } },
+    { ...validBatchInput(), context: { weather: "stormy" } },
+    { ...validBatchInput(), context: { occasion: 123 } },
+  ];
+
+  for (const body of invalidBodies) {
+    const route = makeBatchRouteDependencies({
+      fitScoreEnabled: true,
+      recommendationEnabled: false,
+    });
+    const result = makeBatchResponse();
+
+    await createBatchFitScoreHandler(route.dependencies as any)(
+      makeBatchRequest(body) as any,
+      result.response as any
+    );
+
+    assert.equal(result.state.statusCode, 400);
+    assert.deepEqual(result.state.body, {
+      error: {
+        code: "INVALID_FIT_SCORE_REQUEST",
+        message: "Yêu cầu Fit Score không hợp lệ",
+      },
+    });
+    assert.equal(route.calculateCalls(), 0);
+  }
+}
+
+await testFitScoreRequiresItsOwnEntitlement();
+await testBatchRouteRejectsInvalidRequests();
 
 console.log("Batch Fit Score service tests passed.");
