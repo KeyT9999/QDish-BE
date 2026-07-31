@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 
 import {
   aggregateCustomerSegments,
-  buildDiningVisitQuery
+  buildDiningVisitQuery,
+  countDiningVisitResponses
 } from "../services/merchantInsightService.js";
 
 const restaurantA = new mongoose.Types.ObjectId();
@@ -39,10 +40,24 @@ function testEmptyVisitsReturnRealZeroValues() {
   assert.equal(segments.reduce((sum, segment) => sum + segment.count, 0), 0);
 }
 
+function testCountsSurveyResponsesSeparatelyFromGoalSelections() {
+  const visits = [
+    { goalsSnapshot: ["BALANCED", "LIGHT_MEAL"] },
+    { goalsSnapshot: ["BALANCED"] }
+  ];
+
+  assert.equal(countDiningVisitResponses(visits), 2);
+  assert.equal(
+    aggregateCustomerSegments(visits).reduce((sum, segment) => sum + segment.count, 0),
+    3
+  );
+}
+
 function run() {
   testBuildsRestaurantScopedQuery();
   testAggregatesSurveySelections();
   testEmptyVisitsReturnRealZeroValues();
+  testCountsSurveyResponsesSeparatelyFromGoalSelections();
   console.log("merchant insight isolation tests passed");
 }
 

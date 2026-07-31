@@ -109,6 +109,8 @@ Endpoint là public vì khách không đăng nhập. Việc xác thực ngữ c�
 
 `MerchantInsightService` truy vấn `AnonymousDiningVisit` bằng cả `restaurantId` và khoảng thời gian. Phân khúc được tổng hợp từ `goalsSnapshot`.
 
+Response bổ sung `surveyResponseCount`, là số bản ghi visit thực tế. Trường này tách biệt với tổng `customerSegments[].count`, vì một lượt khảo sát có thể chọn nhiều mục tiêu ăn uống.
+
 Không còn:
 
 - Truy vấn `UserDiningProfile` toàn hệ thống.

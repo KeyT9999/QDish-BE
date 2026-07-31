@@ -22,6 +22,7 @@ export interface MerchantInsights {
     count: number;
     label: string;
   }>;
+  surveyResponseCount: number;
   gapAnalysis: string[];
   peakHours: {
     periods: Array<{
@@ -79,6 +80,10 @@ export const aggregateCustomerSegments = (
     }))
     .sort((a, b) => b.count - a.count);
 };
+
+export const countDiningVisitResponses = (
+  visits: Array<{ goalsSnapshot?: string[] }>
+): number => visits.length;
 
 export class MerchantInsightService {
   /**
@@ -173,6 +178,7 @@ export class MerchantInsightService {
       buildDiningVisitQuery(restaurantId, start, end)
     ).select("goalsSnapshot").lean();
     const customerSegments = aggregateCustomerSegments(recentVisits);
+    const surveyResponseCount = countDiningVisitResponses(recentVisits);
 
     // 5. Smart Gap Analysis (AI Advice)
     const gapAnalysis: string[] = [];
@@ -271,6 +277,7 @@ export class MerchantInsightService {
       attributeDistribution: attributesMap,
       topDishes,
       customerSegments,
+      surveyResponseCount,
       gapAnalysis,
       peakHours
     };

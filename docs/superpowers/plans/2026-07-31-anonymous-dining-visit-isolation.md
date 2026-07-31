@@ -272,7 +272,7 @@ git commit -m "Expose anonymous dining visit endpoint"
 
 **Interfaces:**
 - Consumes: restaurant-scoped `AnonymousDiningVisit` documents from Task 1.
-- Produces: the existing `MerchantInsights.customerSegments` response shape, now representing survey selections.
+- Produces: `MerchantInsights.customerSegments` representing goal selections and additive `surveyResponseCount` representing distinct survey submissions.
 
 - [ ] **Step 1: Write failing isolation and aggregation tests**
 
@@ -487,7 +487,7 @@ git commit -m "Record restaurant-scoped dining visits"
 - Modify: `QR_FOOD_ORDER_FE/src/components/dashboard/restaurant/MerchantInsightsTab.tsx`
 
 **Interfaces:**
-- Consumes: unchanged `MerchantInsights.customerSegments` response shape.
+- Consumes: `MerchantInsights.customerSegments` plus additive `surveyResponseCount`.
 - Produces: honest copy that describes survey responses and no longer implies unique people.
 
 - [ ] **Step 1: Replace identity claims with survey terminology**
