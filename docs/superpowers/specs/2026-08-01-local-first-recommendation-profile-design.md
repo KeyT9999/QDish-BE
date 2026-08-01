@@ -1,6 +1,6 @@
 # Local-First Recommendation Profile Design
 
-**Date:** 2026-08-01  
+**Date:** 2026-08-01
 **Status:** Approved
 **Repositories:** `QR_FOOD_ORDER_BE`, `QR_FOOD_ORDER_FE`
 
