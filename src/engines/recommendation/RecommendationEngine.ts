@@ -180,25 +180,27 @@ export class RecommendationEngine {
         context,
       );
       const bestFit = FitScoreEngine.getBestFitContext(fitScores);
-      const primaryScore = resolvedType ? (fitScores[resolvedType] ?? bestFit.score) : bestFit.score;
+      const selectedContext = resolvedType ?? bestFit.type;
+      const primaryScore = fitScores[selectedContext] ?? bestFit.score;
+      const selectedContextLabel = FitScoreEngine.SCORE_LABELS[selectedContext] ?? bestFit.label;
       const allergenWarnings: string[] = [];
       const reason = mode === "PERSONALIZED"
-        ? personalizedReason(primaryScore, bestFit.type, computedNutrition.protein)
+        ? personalizedReason(primaryScore, selectedContext, computedNutrition.protein)
         : generalReason(dish, primaryScore, context);
 
       scoredItems.push({
         dish,
         fitScore: primaryScore,
-        bestContext: bestFit.type,
-        bestContextLabel: bestFit.label,
+        bestContext: selectedContext,
+        bestContextLabel: selectedContextLabel,
         reason,
         allergenWarnings,
       });
       fullMenu.push({
         dish,
         fitScore: primaryScore,
-        bestContext: bestFit.type,
-        bestContextLabel: bestFit.label,
+        bestContext: selectedContext,
+        bestContextLabel: selectedContextLabel,
         allergenWarnings,
       });
     }
