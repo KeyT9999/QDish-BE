@@ -1,32 +1,15 @@
 import { Request, Response, Router } from "express";
-import mongoose from "mongoose";
 import { DishNutritionProfile } from "../models/DishNutritionProfile.js";
 import { FitScoreEngine } from "../engines/fitScore/FitScoreEngine.js";
 import { MenuItem } from "../models/MenuItem.js";
-import {
-  BatchFitScoreInput,
-  calculateBatchFitScores,
-} from "../services/batchFitScoreService.js";
+import { calculateBatchFitScores } from "../services/batchFitScoreService.js";
+import { isValidBatchFitScoreInput } from "../services/diningProfileValidation.js";
 import {
   getPlanLimits,
   resolveOwnerByRestaurant,
 } from "../services/subscriptionService.js";
 
 const router = Router();
-
-const ALLOWED_GOALS = new Set([
-  "MUSCLE_GAIN", "ENERGY_BOOST", "LIGHT_MEAL", "COMFORT",
-  "BALANCED", "WEIGHT_LOSS", "MAINTENANCE", "GENERAL_HEALTH",
-]);
-const ALLOWED_PREFERENCES = new Set([
-  "VEGAN", "VEGETARIAN", "LOW_CARB", "HIGH_PROTEIN",
-  "KETO", "GLUTEN_FREE", "LOW_FAT", "SUGAR_FREE",
-]);
-const ALLOWED_ALLERGIES = new Set([
-  "GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH",
-]);
-const ALLOWED_TIME_OF_DAY = new Set(["breakfast", "lunch", "dinner", "late_night"]);
-const ALLOWED_WEATHER = new Set(["hot", "rainy", "cool", "cold"]);
 
 interface BatchFitScoreRouteDependencies {
   resolveOwnerByRestaurant: typeof resolveOwnerByRestaurant;
@@ -39,69 +22,6 @@ const defaultBatchFitScoreRouteDependencies: BatchFitScoreRouteDependencies = {
   getPlanLimits,
   calculateBatchFitScores,
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyAllowedValues(value: unknown, allowedValues: Set<string>): value is string[] {
-  return Array.isArray(value)
-    && value.length <= 10
-    && value.every((item) => typeof item === "string" && allowedValues.has(item))
-    && new Set(value).size === value.length;
-}
-
-function isValidBatchFitScoreInput(value: unknown): value is BatchFitScoreInput {
-  if (!isRecord(value) || typeof value.restaurantId !== "string") {
-    return false;
-  }
-
-  if (!mongoose.isObjectIdOrHexString(value.restaurantId) || !isRecord(value.userProfile)) {
-    return false;
-  }
-
-  const { goals, preferences, allergies } = value.userProfile;
-  if (
-    !hasOnlyAllowedValues(goals, ALLOWED_GOALS)
-    || !hasOnlyAllowedValues(preferences, ALLOWED_PREFERENCES)
-    || !hasOnlyAllowedValues(allergies, ALLOWED_ALLERGIES)
-  ) {
-    return false;
-  }
-
-  if (value.context !== undefined) {
-    if (!isRecord(value.context)) {
-      return false;
-    }
-
-    if (
-      value.context.timeOfDay !== undefined
-      && (typeof value.context.timeOfDay !== "string" || !ALLOWED_TIME_OF_DAY.has(value.context.timeOfDay))
-    ) {
-      return false;
-    }
-
-    if (
-      value.context.postWorkout !== undefined
-      && typeof value.context.postWorkout !== "boolean"
-    ) {
-      return false;
-    }
-
-    if (
-      value.context.weather !== undefined
-      && (typeof value.context.weather !== "string" || !ALLOWED_WEATHER.has(value.context.weather))
-    ) {
-      return false;
-    }
-
-    if (value.context.occasion !== undefined && typeof value.context.occasion !== "string") {
-      return false;
-    }
-  }
-
-  return true;
-}
 
 export const createBatchFitScoreHandler = (
   dependencies: BatchFitScoreRouteDependencies = defaultBatchFitScoreRouteDependencies
