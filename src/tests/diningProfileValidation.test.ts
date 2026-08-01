@@ -5,6 +5,7 @@ import {
 } from "../services/diningProfileValidation.js";
 
 const restaurantId = "507f1f77bcf86cd799439011";
+const validUserProfile = { goals: ["BALANCED"], preferences: ["VEGAN"], allergies: ["NUTS"] };
 
 assert.equal(parseRecommendationRequest({ restaurantId }).ok, true);
 assert.equal(parseRecommendationRequest({ restaurantId, userId: "legacy-guest" }).ok, true);
@@ -16,6 +17,33 @@ assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
 }}).ok, false);
 assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
   goals: ["BALANCED", "BALANCED"], preferences: [], allergies: [],
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  preferences: [], allergies: [],
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  goals: [], allergies: [],
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  goals: [], preferences: [],
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  ...validUserProfile, goals: Array(11).fill("BALANCED"),
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  ...validUserProfile, preferences: Array(11).fill("VEGAN"),
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  ...validUserProfile, allergies: Array(11).fill("NUTS"),
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  ...validUserProfile, goals: ["NOT_A_GOAL"],
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  ...validUserProfile, preferences: ["NOT_A_PREFERENCE"],
+}}).ok, false);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  ...validUserProfile, allergies: ["NOT_AN_ALLERGY"],
 }}).ok, false);
 assert.equal(parseRecommendationRequest({ restaurantId, context: { weather: "storm" } }).ok, false);
 assert.equal(parseRecommendationRequest({ restaurantId, context: { occasion: { $ne: null } } }).ok, false);
