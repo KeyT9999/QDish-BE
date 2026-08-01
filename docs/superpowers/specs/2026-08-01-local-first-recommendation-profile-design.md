@@ -1,7 +1,7 @@
 # Local-First Recommendation Profile Design
 
 **Date:** 2026-08-01  
-**Status:** Awaiting user review  
+**Status:** Approved
 **Repositories:** `QR_FOOD_ORDER_BE`, `QR_FOOD_ORDER_FE`
 
 ## Problem
