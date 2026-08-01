@@ -1,7 +1,19 @@
+import mongoose from "mongoose";
 import { MenuItem, IMenuItem } from "../../models/MenuItem.js";
 import { DishNutritionProfile, IDishNutritionProfile } from "../../models/DishNutritionProfile.js";
-import { FitScoreEngine, DiningContext, UserDiningProfile } from "../fitScore/FitScoreEngine.js";
-import mongoose from "mongoose";
+import type {
+  DiningProfileSnapshot,
+  RecommendationContextInput,
+} from "../../services/diningProfileValidation.js";
+import { FitScoreEngine } from "../fitScore/FitScoreEngine.js";
+
+export type RecommendationMode = "GENERAL" | "PERSONALIZED";
+export type RecommendationEmptyReason = "NO_AVAILABLE_DISHES" | "NO_ALLERGEN_SAFE_DISHES";
+
+export interface RecommendationEngineDependencies {
+  findMenuItems(restaurantId: mongoose.Types.ObjectId): Promise<IMenuItem[]>;
+  findNutritionProfiles(dishIds: unknown[]): Promise<IDishNutritionProfile[]>;
+}
 
 export interface RecommendedDish {
   dish: IMenuItem;
@@ -9,6 +21,14 @@ export interface RecommendedDish {
   bestContext: string;
   bestContextLabel: string;
   reason: string;
+  allergenWarnings: string[];
+}
+
+export interface ScoredDish {
+  dish: IMenuItem;
+  fitScore: number;
+  bestContext: string;
+  bestContextLabel: string;
   allergenWarnings: string[];
 }
 
@@ -20,169 +40,195 @@ export interface PairingSuggestion {
 }
 
 export interface RecommendationResponse {
+  mode: RecommendationMode;
+  emptyReason?: RecommendationEmptyReason;
   bestForYou: RecommendedDish[];
-  fullMenu: Array<{
-    dish: IMenuItem;
-    fitScore: number;
-    bestContext: string;
-    bestContextLabel: string;
-    allergenWarnings: string[];
-  }>;
+  fullMenu: ScoredDish[];
   pairingSuggestions: PairingSuggestion[];
+}
+
+const defaultDependencies: RecommendationEngineDependencies = {
+  async findMenuItems(restaurantId) {
+    return (await MenuItem.find({ restaurantId, available: true }).lean()) as unknown as IMenuItem[];
+  },
+  async findNutritionProfiles(dishIds) {
+    return (await DishNutritionProfile.find({
+      dishId: { $in: dishIds },
+    }).lean()) as unknown as IDishNutritionProfile[];
+  },
+};
+
+function emptyResponse(mode: RecommendationMode, emptyReason: RecommendationEmptyReason): RecommendationResponse {
+  return {
+    mode,
+    emptyReason,
+    bestForYou: [],
+    fullMenu: [],
+    pairingSuggestions: [],
+  };
+}
+
+function normalizedAllergens(values: string[] | undefined): string[] {
+  return (values ?? []).map((value) => value.toLowerCase());
+}
+
+function hasAllergenConflict(allergens: string[], userProfile?: DiningProfileSnapshot): boolean {
+  const requestedAllergies = new Set(normalizedAllergens(userProfile?.allergies));
+  return allergens.some((allergen) => requestedAllergies.has(allergen.toLowerCase()));
+}
+
+function generalReason(dish: IMenuItem, primaryScore: number, context?: RecommendationContextInput): string {
+  const timeDescription = context?.timeOfDay ? ` cho bữa ${context.timeOfDay}` : "";
+  return `${dish.name} đạt ${primaryScore}% điểm phù hợp${timeDescription}.`;
+}
+
+function personalizedReason(
+  primaryScore: number,
+  bestContext: string,
+  protein: number,
+): string {
+  if (primaryScore >= 80 && bestContext === "gym_fit") {
+    return `✨ Đạt ${primaryScore}% Gym Fit nhờ cung cấp ${protein}g đạm, hỗ trợ phục hồi cơ bắp.`;
+  }
+  if (primaryScore >= 80 && bestContext === "energy_boost_fit") {
+    return `⚡ Đạt ${primaryScore}% cho mục tiêu tăng năng lượng nhờ nguồn tinh bột bền bỉ.`;
+  }
+  if (primaryScore >= 80 && bestContext === "late_night_fit") {
+    return `🌙 Đạt ${primaryScore}% cho bữa muộn dễ chịu và vừa bụng.`;
+  }
+  return `Phù hợp ${primaryScore}% với khẩu vị của bạn.`;
+}
+
+function isPairingCandidate(dish: IMenuItem): boolean {
+  const category = dish.category.toLowerCase();
+  return (
+    category.includes("salad")
+    || category.includes("uống")
+    || category.includes("rau")
+    || dish.foodAttributes?.includes("LIGHT_MEAL") === true
+    || dish.foodAttributes?.includes("REFRESHING") === true
+  );
 }
 
 export class RecommendationEngine {
   /**
-   * Generates highly personalized dish recommendations and pairing suggestions.
+   * Generates general or personalized dish recommendations and allergen-safe pairing suggestions.
    */
   public static async generateRecommendations(
     restaurantId: string,
-    userProfile?: UserDiningProfile,
-    context?: DiningContext
+    userProfile?: DiningProfileSnapshot,
+    context?: RecommendationContextInput,
+    dependencies: RecommendationEngineDependencies = defaultDependencies,
   ): Promise<RecommendationResponse> {
     const rId = new mongoose.Types.ObjectId(restaurantId);
+    const mode: RecommendationMode = userProfile
+      && (userProfile.goals.length > 0 || userProfile.preferences.length > 0)
+      ? "PERSONALIZED"
+      : "GENERAL";
 
-    // 1. Load all restaurant menu items
-    const menuItems = await MenuItem.find({ restaurantId: rId, available: true }).lean();
-
-    // 2. Load cached nutrition profiles
-    const dishIds = menuItems.map((item) => item._id);
-    const nutritionProfiles = await DishNutritionProfile.find({
-      dishId: { $in: dishIds }
-    }).lean();
-
-    const profileMap = new Map<string, IDishNutritionProfile>();
-    for (const p of nutritionProfiles) {
-      profileMap.set(p.dishId.toString(), p as any);
+    const menuItems = await dependencies.findMenuItems(rId);
+    if (menuItems.length === 0) {
+      return emptyResponse(mode, "NO_AVAILABLE_DISHES");
     }
 
-    const primaryGoalType =
-      FitScoreEngine.resolvePrimaryScoreType(userProfile) ?? "office_lunch_fit";
+    const nutritionProfiles = await dependencies.findNutritionProfiles(menuItems.map((item) => item._id));
+    const profileMap = new Map<string, IDishNutritionProfile>();
+    for (const profile of nutritionProfiles) {
+      profileMap.set(profile.dishId.toString(), profile);
+    }
 
+    const safeMenuItems = menuItems.filter((dish) => {
+      const cachedProfile = profileMap.get(dish._id.toString());
+      const combinedAllergens = [
+        ...normalizedAllergens(dish.allergens),
+        ...normalizedAllergens(cachedProfile?.allergens),
+      ];
+      return !hasAllergenConflict(combinedAllergens, userProfile);
+    });
+
+    if (safeMenuItems.length === 0) {
+      return emptyResponse(mode, "NO_ALLERGEN_SAFE_DISHES");
+    }
+
+    const resolvedType = FitScoreEngine.resolvePrimaryScoreType(userProfile);
     const scoredItems: RecommendedDish[] = [];
-    const fullMenuItemsWithScores: any[] = [];
+    const fullMenu: ScoredDish[] = [];
 
-    for (const dish of menuItems) {
-      const dishIdStr = dish._id.toString();
-      const cachedProf = profileMap.get(dishIdStr);
-
-      const allergens = dish.allergens || [];
-      const foodAttributes = dish.foodAttributes || [];
-      
-      // Determine if there are allergen warning conflicts
-      const allergenWarnings: string[] = [];
-      if (userProfile && userProfile.allergies && userProfile.allergies.length > 0) {
-        const intersection = allergens.filter((a) =>
-          userProfile.allergies.map(x => x.toLowerCase()).includes(a.toLowerCase())
-        );
-        if (intersection.length > 0) {
-          allergenWarnings.push(...intersection);
-        }
-      }
-
-      // Convert cached profile or fallback to basic values for scoring
+    for (const dish of safeMenuItems) {
+      const cachedProfile = profileMap.get(dish._id.toString());
+      const allergens = [
+        ...normalizedAllergens(dish.allergens),
+        ...normalizedAllergens(cachedProfile?.allergens),
+      ];
+      const foodAttributes = dish.foodAttributes ?? [];
       const computedNutrition = {
-        calories: cachedProf?.calories ?? dish.calories ?? 0,
-        protein: cachedProf?.protein ?? dish.protein ?? 0,
-        carb: cachedProf?.carb ?? dish.carbs ?? 0,
-        fat: cachedProf?.fat ?? dish.fat ?? 0,
-        fiber: cachedProf?.fiber ?? dish.fiber ?? 0,
-        sugar: cachedProf?.sugar ?? dish.sugar ?? 0,
-        sodium: cachedProf?.sodium ?? dish.sodium ?? 0,
+        calories: cachedProfile?.calories ?? dish.calories ?? 0,
+        protein: cachedProfile?.protein ?? dish.protein ?? 0,
+        carb: cachedProfile?.carb ?? dish.carbs ?? 0,
+        fat: cachedProfile?.fat ?? dish.fat ?? 0,
+        fiber: cachedProfile?.fiber ?? dish.fiber ?? 0,
+        sugar: cachedProfile?.sugar ?? dish.sugar ?? 0,
+        sodium: cachedProfile?.sodium ?? dish.sodium ?? 0,
         attributes: foodAttributes,
-        allergens: allergens,
-        nutritionConfidence: cachedProf?.nutritionConfidence ?? 1.0
+        allergens,
+        nutritionConfidence: cachedProfile?.nutritionConfidence ?? 1,
       };
-
-      // Calculate all fit scores
       const fitScores = FitScoreEngine.calculateAllFitScores(
         computedNutrition,
         foodAttributes,
         userProfile,
-        context
+        context,
       );
-
       const bestFit = FitScoreEngine.getBestFitContext(fitScores);
-      const isBlocked = allergenWarnings.length > 0;
+      const primaryScore = resolvedType ? (fitScores[resolvedType] ?? bestFit.score) : bestFit.score;
+      const allergenWarnings: string[] = [];
+      const reason = mode === "PERSONALIZED"
+        ? personalizedReason(primaryScore, bestFit.type, computedNutrition.protein)
+        : generalReason(dish, primaryScore, context);
 
-      // Primary score for sorting
-      const primaryScore = isBlocked ? 0 : (fitScores[primaryGoalType] || bestFit.score);
-
-      // Generate a dynamic, non-judgmental description of why it fits
-      let reason = `Phù hợp ${primaryScore}% với khẩu vị của bạn.`;
-      if (primaryScore >= 80) {
-        if (primaryGoalType === "gym_fit") {
-          reason = `✨ Đạt ${primaryScore}% Gym Fit nhờ cung cấp đạm dồi dào (${computedNutrition.protein}g) hỗ trợ phục hồi cơ bắp cực tốt.`;
-        } else if (primaryGoalType === "energy_boost_fit") {
-          reason = `⚡ Phù hợp ${primaryScore}% cho buổi sạc năng lượng nhờ lượng tinh bột phức hợp bền bỉ.`;
-        } else if (primaryGoalType === "late_night_fit") {
-          reason = `🌙 Món ngon dễ chịu đạt ${primaryScore}% cho bữa chiều muộn ấm bụng mà không đầy dạ dày.`;
-        } else {
-          reason = `🥗 Đạt chỉ số phù hợp cao (${primaryScore}%) cân đối hoàn hảo cho mục tiêu dinh dưỡng hôm nay.`;
-        }
-      }
-
-      const recDish: RecommendedDish = {
-        dish: dish as any,
+      scoredItems.push({
+        dish,
         fitScore: primaryScore,
         bestContext: bestFit.type,
         bestContextLabel: bestFit.label,
         reason,
-        allergenWarnings
-      };
-
-      scoredItems.push(recDish);
-      fullMenuItemsWithScores.push({
-        dish: dish as any,
+        allergenWarnings,
+      });
+      fullMenu.push({
+        dish,
         fitScore: primaryScore,
         bestContext: bestFit.type,
         bestContextLabel: bestFit.label,
-        allergenWarnings
+        allergenWarnings,
       });
     }
 
-    // Sort to find the absolute best recommended items (excluding blocked ones)
     const bestForYou = scoredItems
-      .filter((item) => item.fitScore > 0 && item.allergenWarnings.length === 0)
+      .filter((item) => item.fitScore > 0)
       .sort((a, b) => b.fitScore - a.fitScore)
       .slice(0, 3);
-
-    // 6. Generate Pairing Suggestions
+    const sideDishes = safeMenuItems.filter(isPairingCandidate);
     const pairingSuggestions: PairingSuggestion[] = [];
-    const sideDishes = menuItems.filter((d) => 
-      d.category.toLowerCase().includes("salad") || 
-      d.category.toLowerCase().includes("uống") || 
-      d.category.toLowerCase().includes("rau") ||
-      d.foodAttributes?.includes("LIGHT_MEAL") ||
-      d.foodAttributes?.includes("REFRESHING")
-    );
 
-    for (const rec of bestForYou) {
-      if (sideDishes.length > 0) {
-        // Find a complementary side dish (not the main dish itself)
-        const match = sideDishes.find((s) => s._id.toString() !== rec.dish._id.toString());
-        if (match) {
-          let pairingReason = "Sự kết hợp hoàn hảo giúp cân bằng hương vị.";
-          if (rec.dish.foodAttributes?.includes("HIGH_PROTEIN")) {
-            pairingReason = `🥗 Ăn kèm với ${match.name} để bổ sung thêm chất xơ tự nhiên và hỗ trợ hấp thụ đạm tối ưu.`;
-          } else if (rec.dish.foodAttributes?.includes("HEAVY_MEAL")) {
-            pairingReason = `🧊 Kết hợp ly nước thanh mát giúp bữa ăn nhẹ bớt ngấy và kích thích tiêu hóa dễ chịu hơn.`;
-          }
+    for (const recommendation of bestForYou) {
+      const pairedDish = sideDishes.find((dish) => dish._id.toString() !== recommendation.dish._id.toString());
+      if (!pairedDish) continue;
 
-          pairingSuggestions.push({
-            mainDishId: rec.dish._id.toString(),
-            mainDishName: rec.dish.name,
-            pairedDish: match as any,
-            reason: pairingReason
-          });
-        }
-      }
+      pairingSuggestions.push({
+        mainDishId: recommendation.dish._id.toString(),
+        mainDishName: recommendation.dish.name,
+        pairedDish,
+        reason: recommendation.dish.foodAttributes?.includes("HIGH_PROTEIN")
+          ? `Ăn kèm với ${pairedDish.name} để bổ sung chất xơ và cân bằng bữa ăn.`
+          : "Sự kết hợp giúp cân bằng hương vị cho bữa ăn.",
+      });
     }
 
     return {
+      mode,
       bestForYou,
-      fullMenu: fullMenuItemsWithScores.sort((a, b) => b.fitScore - a.fitScore),
-      pairingSuggestions
+      fullMenu: fullMenu.sort((a, b) => b.fitScore - a.fitScore),
+      pairingSuggestions,
     };
   }
 }
