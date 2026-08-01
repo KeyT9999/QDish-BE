@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import {
+  isBoundedUniqueAllowedStringList,
   isValidBatchFitScoreInput,
   parseRecommendationRequest,
 } from "../services/diningProfileValidation.js";
 
 const restaurantId = "507f1f77bcf86cd799439011";
 const validUserProfile = { goals: ["BALANCED"], preferences: ["VEGAN"], allergies: ["NUTS"] };
+const genericAllowedValues = Array.from({ length: 11 }, (_, index) => `OPTION_${index}`);
+
+assert.equal(isBoundedUniqueAllowedStringList(genericAllowedValues.slice(0, 10), genericAllowedValues), true);
+assert.equal(isBoundedUniqueAllowedStringList(genericAllowedValues, genericAllowedValues), false);
 
 assert.equal(parseRecommendationRequest({ restaurantId }).ok, true);
 assert.equal(parseRecommendationRequest({ restaurantId, userId: "legacy-guest" }).ok, true);

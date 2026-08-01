@@ -42,7 +42,7 @@ function hasExactKeys(value: Record<string, unknown>, allowedKeys: readonly stri
   return Object.keys(value).every((key) => allowedKeys.includes(key));
 }
 
-function hasOnlyAllowedValues(value: unknown, allowedValues: readonly string[]): value is string[] {
+export function isBoundedUniqueAllowedStringList(value: unknown, allowedValues: readonly string[]): value is string[] {
   return Array.isArray(value)
     && value.length <= 10
     && value.every((item) => typeof item === "string" && allowedValues.includes(item))
@@ -55,9 +55,9 @@ function parseDiningProfile(value: unknown): DiningProfileSnapshot | undefined {
   }
 
   if (
-    !hasOnlyAllowedValues(value.goals, DINING_GOALS)
-    || !hasOnlyAllowedValues(value.preferences, DINING_PREFERENCES)
-    || !hasOnlyAllowedValues(value.allergies, DINING_ALLERGIES)
+    !isBoundedUniqueAllowedStringList(value.goals, DINING_GOALS)
+    || !isBoundedUniqueAllowedStringList(value.preferences, DINING_PREFERENCES)
+    || !isBoundedUniqueAllowedStringList(value.allergies, DINING_ALLERGIES)
   ) {
     return undefined;
   }
