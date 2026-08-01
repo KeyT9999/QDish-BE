@@ -16,6 +16,7 @@
     "test:batch-fit-score": "tsx src/tests/batchFitScoreService.test.ts",
     "test:dining-profile-validation": "tsx src/tests/diningProfileValidation.test.ts",
     "test:recommendation-engine": "tsx src/tests/recommendationEnginePolicy.test.ts",
+    "test:recommendation-routes": "tsx src/tests/recommendationRoutes.test.ts",
     "start": "node dist/index.js",
     "seed:super-admin": "tsx src/scripts/createSuperAdmin.ts",
     "seed:plans": "tsx src/scripts/seedPlans.ts",
