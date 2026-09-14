@@ -5,6 +5,7 @@ import { createServer } from "http";
 
 import { createCorsOptions } from "./config/cors.js";
 import { connectDB } from "./config/db.js";
+import { getDeploymentCommit } from "./config/deployment.js";
 import restaurantRoutes from "./routes/restaurantRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import ownerRoutes from "./routes/ownerRoutes.js";
@@ -44,12 +45,17 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     environment: process.env.NODE_ENV || "production",
+    commit: getDeploymentCommit(),
     timestamp: new Date().toISOString()
   });
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", uptime: process.uptime() });
+  res.json({
+    status: "ok",
+    commit: getDeploymentCommit(),
+    uptime: process.uptime()
+  });
 });
 
 app.use("/api/auth", authRoutes);
