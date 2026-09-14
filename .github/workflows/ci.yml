@@ -1,4 +1,4 @@
-name: Backend CI
+name: Backend CI/CD
 
 on:
   pull_request:
@@ -45,3 +45,50 @@ jobs:
       - name: Audit production dependencies
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
+
+  deploy-production:
+    name: Backend Production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: Production
+      url: ${{ vars.BACKEND_PRODUCTION_URL }}
+    env:
+      BACKEND_PRODUCTION_URL: ${{ vars.BACKEND_PRODUCTION_URL }}
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+
+    steps:
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          test -n "$BACKEND_PRODUCTION_URL" || { echo "Missing BACKEND_PRODUCTION_URL repository variable"; exit 1; }
+          test -n "$RENDER_DEPLOY_HOOK_URL" || { echo "Missing RENDER_DEPLOY_HOOK_URL repository secret"; exit 1; }
+
+      - name: Trigger Render deployment
+        run: >-
+          curl --fail --silent --show-error
+          --get --data-urlencode "ref=$GITHUB_SHA"
+          "$RENDER_DEPLOY_HOOK_URL" > /dev/null
+
+      - name: Wait for the deployed commit
+        shell: bash
+        run: |
+          health_url="${BACKEND_PRODUCTION_URL%/}/api/health"
+
+          for attempt in {1..90}; do
+            response="$(curl --fail --silent --show-error "$health_url" 2>/dev/null || true)"
+            deployed_commit="$(jq -r '.commit // empty' <<< "$response" 2>/dev/null || true)"
+
+            if [[ "$deployed_commit" == "$GITHUB_SHA" ]]; then
+              echo "Backend deployment is healthy at commit $GITHUB_SHA"
+              exit 0
+            fi
+
+            echo "Waiting for Render deployment ($attempt/90)..."
+            sleep 10
+          done
+
+          echo "Backend did not become healthy at commit $GITHUB_SHA within 15 minutes"
+          exit 1
