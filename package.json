@@ -21,6 +21,7 @@
     "test:dining-profile-validation": "tsx src/tests/diningProfileValidation.test.ts",
     "test:recommendation-engine": "tsx src/tests/recommendationEnginePolicy.test.ts",
     "test:recommendation-routes": "tsx src/tests/recommendationRoutes.test.ts",
+    "test:ci": "npm run test:table-session && npm run test:table-bill && npm run test:ingredients && npm run test:anonymous-dining && npm run test:merchant-insight-isolation && npm run test:insight-entitlements && npm run test:customer-identity && npm run test:customer-crm-policy && npm run test:customer-order-capture && npm run test:customer-crm-routes && npm run test:food-attribute-entitlements && npm run test:batch-fit-score && npm run test:dining-profile-validation && npm run test:recommendation-engine && npm run test:recommendation-routes",
     "start": "node dist/index.js",
     "seed:super-admin": "tsx src/scripts/createSuperAdmin.ts",
     "seed:plans": "tsx src/scripts/seedPlans.ts",
