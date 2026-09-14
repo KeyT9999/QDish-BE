@@ -21,6 +21,7 @@ export interface ITableSession extends Document {
   sessionCode: string;
   billId?: Types.ObjectId;
   status: TableSessionStatus;
+  customerId?: Types.ObjectId;
   customerName?: string;
   customerPhone?: string;
   openedAt: Date;
@@ -66,6 +67,11 @@ const TableSessionSchema = new Schema<ITableSession>(
       enum: Object.values(TableSessionStatus),
       default: TableSessionStatus.OPEN,
       required: true
+    },
+    customerId: {
+      type: Schema.Types.ObjectId,
+      ref: "RestaurantCustomer",
+      index: true
     },
     customerName: {
       type: String,
@@ -127,6 +133,7 @@ TableSessionSchema.index({ restaurantId: 1, sessionCode: 1 }, { unique: true });
 
 // Query history
 TableSessionSchema.index({ restaurantId: 1, createdAt: -1 });
+TableSessionSchema.index({ restaurantId: 1, customerId: 1, createdAt: -1 });
 
 // Lookup by tableId
 TableSessionSchema.index({ tableId: 1, status: 1 });

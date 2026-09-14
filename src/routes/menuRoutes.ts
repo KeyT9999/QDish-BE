@@ -4,6 +4,10 @@ import mongoose from "mongoose";
 import { MenuItem } from "../models/MenuItem.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
 import { NutritionService } from "../services/nutritionService.js";
+import {
+  isFoodAttributesEnabledForRestaurant,
+  serializeMenuItemForFeatures
+} from "../services/foodAttributeEntitlementService.js";
 
 const router = Router();
 
@@ -33,26 +37,14 @@ router.get("/", async (req, res) => {
     filter.available = true;
   }
 
-  const items = await MenuItem.find(filter).sort({ createdAt: -1 }).lean();
-  
-  // Map virtual fields for frontend consumption
-  const itemsWithNutrition = items.map((item) => ({
-    ...item,
-    id: item._id,
-    nutrition: {
-      calories: item.calories ?? 0,
-      protein: item.protein ?? 0,
-      carbs: item.carbs ?? 0,
-      fat: item.fat ?? 0,
-      fiber: item.fiber ?? 0,
-      sugar: item.sugar ?? 0,
-      sodium: item.sodium ?? 0,
-      confidenceScore: item.confidenceScore ?? 0
-    },
-    // Expose attribute / allergen arrays from recipe engine
-    foodAttributes: item.foodAttributes ?? [],
-    allergens: item.allergens ?? [],
-  }));
+  const [items, foodAttributesEnabled] = await Promise.all([
+    MenuItem.find(filter).sort({ createdAt: -1 }).lean(),
+    isFoodAttributesEnabledForRestaurant(restaurantId)
+  ]);
+
+  const itemsWithNutrition = items.map((item) =>
+    serializeMenuItemForFeatures(item, foodAttributesEnabled)
+  );
 
   res.json(itemsWithNutrition);
 });
@@ -143,22 +135,14 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
 
   // Reload item to get updated nutrition cache fields
   const updatedItem = await MenuItem.findById(item._id).lean();
-  if (updatedItem) {
-    (updatedItem as any).id = updatedItem._id;
-    (updatedItem as any).nutrition = {
-      calories: updatedItem.calories ?? 0,
-      protein: updatedItem.protein ?? 0,
-      carbs: updatedItem.carbs ?? 0,
-      fat: updatedItem.fat ?? 0,
-      fiber: updatedItem.fiber ?? 0,
-      sugar: updatedItem.sugar ?? 0,
-      sodium: updatedItem.sodium ?? 0,
-      confidenceScore: updatedItem.confidenceScore ?? 0
-    };
-    return res.status(201).json(updatedItem);
-  }
+  const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(
+    restaurantId
+  );
+  const responseItem = updatedItem ?? item.toObject();
 
-  res.status(201).json(item);
+  return res.status(201).json(
+    serializeMenuItemForFeatures(responseItem, foodAttributesEnabled)
+  );
 });
 
 // Restaurant Admin: sửa món
@@ -230,22 +214,14 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
 
   // Reload item to get updated nutrition cache fields
   const updatedItem = await MenuItem.findById(item._id).lean();
-  if (updatedItem) {
-    (updatedItem as any).id = updatedItem._id;
-    (updatedItem as any).nutrition = {
-      calories: updatedItem.calories ?? 0,
-      protein: updatedItem.protein ?? 0,
-      carbs: updatedItem.carbs ?? 0,
-      fat: updatedItem.fat ?? 0,
-      fiber: updatedItem.fiber ?? 0,
-      sugar: updatedItem.sugar ?? 0,
-      sodium: updatedItem.sodium ?? 0,
-      confidenceScore: updatedItem.confidenceScore ?? 0
-    };
-    return res.json(updatedItem);
-  }
+  const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(
+    restaurantId
+  );
+  const responseItem = updatedItem ?? item.toObject();
 
-  res.json(item);
+  return res.json(
+    serializeMenuItemForFeatures(responseItem, foodAttributesEnabled)
+  );
 });
 
 // Restaurant Admin: xóa món

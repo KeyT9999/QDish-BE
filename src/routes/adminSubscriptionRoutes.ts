@@ -26,6 +26,7 @@ type NormalizedPlanPayload = {
   personalizedMenuEnabled?: boolean;
   advancedAnalyticsEnabled?: boolean;
   customerInsightsEnabled?: boolean;
+  customerCrmEnabled?: boolean;
   features?: string[];
   unavailableFeatures?: string[];
   isPopular?: boolean;
@@ -111,7 +112,8 @@ const normalizePlanPayload = (
     "recommendationEnabled",
     "personalizedMenuEnabled",
     "advancedAnalyticsEnabled",
-    "customerInsightsEnabled"
+    "customerInsightsEnabled",
+    "customerCrmEnabled"
   ] as const;
   for (const field of aiFields) {
     const value = normalizeBoolean(body[field], field, errors);
@@ -318,6 +320,7 @@ router.patch("/plans/:id", async (req, res) => {
     if (payload.personalizedMenuEnabled !== undefined) plan.personalizedMenuEnabled = payload.personalizedMenuEnabled;
     if (payload.advancedAnalyticsEnabled !== undefined) plan.advancedAnalyticsEnabled = payload.advancedAnalyticsEnabled;
     if (payload.customerInsightsEnabled !== undefined) plan.customerInsightsEnabled = payload.customerInsightsEnabled;
+    if (payload.customerCrmEnabled !== undefined) plan.customerCrmEnabled = payload.customerCrmEnabled;
     if (payload.features !== undefined) plan.features = payload.features;
     if (payload.unavailableFeatures !== undefined) plan.unavailableFeatures = payload.unavailableFeatures;
     if (payload.isPopular !== undefined) plan.isPopular = payload.isPopular;

@@ -20,6 +20,7 @@ const plansData = [
     personalizedMenuEnabled: false,
     advancedAnalyticsEnabled: false,
     customerInsightsEnabled: false,
+    customerCrmEnabled: false,
     features: [
       "1 chi nhánh hoạt động",
       "QR Menu số hóa chuẩn hóa",
@@ -50,12 +51,14 @@ const plansData = [
     personalizedMenuEnabled: true,
     advancedAnalyticsEnabled: false,
     customerInsightsEnabled: false,
+    customerCrmEnabled: true,
     features: [
       "Tối đa 3 chi nhánh",
       "QR Menu & Hồ sơ dinh dưỡng",
       "Fit Score / Điểm tương thích món",
       "Personalized Menu cá nhân",
-      "Food Attributes chuyên sâu"
+      "Food Attributes chuyên sâu",
+      "Quản lý khách hàng & lịch sử gọi món"
     ],
     unavailableFeatures: [
       "Dashboard quản trị sâu"
@@ -81,12 +84,14 @@ const plansData = [
     personalizedMenuEnabled: true,
     advancedAnalyticsEnabled: true,
     customerInsightsEnabled: true,
+    customerCrmEnabled: true,
     features: [
       "Không giới hạn chi nhánh",
       "Bao gồm mọi tính năng của PLUS",
       "AI Recommendation Engine",
       "Merchant Dashboard & Analytics",
-      "Customer Insights & Phân tích sâu"
+      "Customer Insights & Phân tích sâu",
+      "Quản lý khách hàng & lịch sử gọi món"
     ],
     unavailableFeatures: [],
     isPopular: false,

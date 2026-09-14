@@ -553,7 +553,8 @@ router.get(
         recommendationEnabled: false,
         personalizedMenuEnabled: false,
         advancedAnalyticsEnabled: false,
-        customerInsightsEnabled: false
+        customerInsightsEnabled: false,
+        customerCrmEnabled: false
       };
 
       if (restaurant.ownerId) {
@@ -566,7 +567,8 @@ router.get(
             recommendationEnabled: plan.recommendationEnabled || false,
             personalizedMenuEnabled: plan.personalizedMenuEnabled || false,
             advancedAnalyticsEnabled: plan.advancedAnalyticsEnabled || false,
-            customerInsightsEnabled: plan.customerInsightsEnabled || false
+            customerInsightsEnabled: plan.customerInsightsEnabled || false,
+            customerCrmEnabled: plan.customerCrmEnabled || false
           };
         } catch (err) {
           console.error("Lỗi khi tải cấu hình gói của nhà hàng:", err);

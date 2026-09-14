@@ -26,6 +26,7 @@ import recommendationRoutes from "./routes/recommendationRoutes.js";
 import insightRoutes from "./routes/insightRoutes.js";
 import anonymousDiningVisitRoutes from "./routes/anonymousDiningVisitRoutes.js";
 import tableSessionRoutes from "./routes/tableSessionRoutes.js";
+import customerRoutes from "./routes/customerRoutes.js";
 import billRoutes from "./routes/billRoutes.js";
 import { initRealtime } from "./realtime/socket.js";
 import { initSubscriptionCronJob } from "./services/subscriptionCronJob.js";
@@ -54,6 +55,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/owners", ownerRoutes);
 app.use("/api/owner/restaurants", ownerRestaurantRoutes);
+app.use("/api/restaurants/customers", customerRoutes);
 app.use("/api/restaurants", restaurantRoutes);
 app.use("/api/restaurants", insightRoutes);
 app.use("/api/restaurants", anonymousDiningVisitRoutes);

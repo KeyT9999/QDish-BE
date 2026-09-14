@@ -165,6 +165,7 @@ router.get(
           personalizedMenuEnabled: plan.personalizedMenuEnabled || false,
           advancedAnalyticsEnabled: plan.advancedAnalyticsEnabled || false,
           customerInsightsEnabled: plan.customerInsightsEnabled || false,
+          customerCrmEnabled: plan.customerCrmEnabled || false,
           features: plan.features
         },
         usage: {

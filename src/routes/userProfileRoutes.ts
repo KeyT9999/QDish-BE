@@ -3,6 +3,10 @@ import { UserDiningProfile } from "../models/UserDiningProfile.js";
 
 const router = Router();
 
+/**
+ * @deprecated Anonymous dining profiles are local-first. Kept temporarily for old clients;
+ * Recommendation must not use this route/model as a fallback.
+ */
 // GET /api/users/profile/:userId - get or create dining profile (guest-safe)
 router.get("/profile/:userId", async (req, res) => {
   try {
@@ -30,6 +34,10 @@ router.get("/profile/:userId", async (req, res) => {
   }
 });
 
+/**
+ * @deprecated Anonymous dining profiles are local-first. Kept temporarily for old clients;
+ * Recommendation must not use this route/model as a fallback.
+ */
 // PUT /api/users/profile/:userId - update user dining profile preferences
 router.put("/profile/:userId", async (req, res) => {
   try {
@@ -67,6 +75,10 @@ router.put("/profile/:userId", async (req, res) => {
   }
 });
 
+/**
+ * @deprecated Anonymous dining profiles are local-first. Kept temporarily for old clients;
+ * Recommendation must not use this route/model as a fallback.
+ */
 // POST /api/users/profile/:userId/onboarding - 3-question quick onboarding setup
 router.post("/profile/:userId/onboarding", async (req, res) => {
   try {

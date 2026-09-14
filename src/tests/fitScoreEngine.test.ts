@@ -1,5 +1,26 @@
+import assert from "node:assert/strict";
 import { FitScoreEngine } from "../engines/fitScore/FitScoreEngine.js";
 import { ComputedNutrition } from "../services/nutritionService.js";
+
+// Primary Fit Score context selection
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: ["MUSCLE_GAIN"], allergies: [], preferences: []
+}), "gym_fit");
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: ["WEIGHT_LOSS"], allergies: [], preferences: []
+}), "quick_lunch_fit");
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: ["ENERGY_BOOST"], allergies: [], preferences: []
+}), "energy_boost_fit");
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: ["COMFORT"], allergies: [], preferences: []
+}), "late_night_fit");
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: ["BALANCED"], allergies: [], preferences: []
+}), "office_lunch_fit");
+assert.equal(FitScoreEngine.resolvePrimaryScoreType({
+  goals: [], allergies: [], preferences: ["VEGAN"]
+}), undefined);
 
 console.log("🏃 Running Fit Score Engine Unit Tests...");
 

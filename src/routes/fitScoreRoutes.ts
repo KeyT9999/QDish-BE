@@ -1,9 +1,66 @@
-import { Router } from "express";
+import { Request, Response, Router } from "express";
 import { DishNutritionProfile } from "../models/DishNutritionProfile.js";
 import { FitScoreEngine } from "../engines/fitScore/FitScoreEngine.js";
 import { MenuItem } from "../models/MenuItem.js";
+import { calculateBatchFitScores } from "../services/batchFitScoreService.js";
+import { isValidBatchFitScoreInput } from "../services/diningProfileValidation.js";
+import {
+  getPlanLimits,
+  resolveOwnerByRestaurant,
+} from "../services/subscriptionService.js";
 
 const router = Router();
+
+interface BatchFitScoreRouteDependencies {
+  resolveOwnerByRestaurant: typeof resolveOwnerByRestaurant;
+  getPlanLimits: typeof getPlanLimits;
+  calculateBatchFitScores: typeof calculateBatchFitScores;
+}
+
+const defaultBatchFitScoreRouteDependencies: BatchFitScoreRouteDependencies = {
+  resolveOwnerByRestaurant,
+  getPlanLimits,
+  calculateBatchFitScores,
+};
+
+export const createBatchFitScoreHandler = (
+  dependencies: BatchFitScoreRouteDependencies = defaultBatchFitScoreRouteDependencies
+) => async (req: Request, res: Response) => {
+  if (!isValidBatchFitScoreInput(req.body)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_FIT_SCORE_REQUEST",
+        message: "Yêu cầu Fit Score không hợp lệ",
+      },
+    });
+  }
+
+  try {
+    const ownerId = await dependencies.resolveOwnerByRestaurant(req.body.restaurantId);
+    if (!ownerId) {
+      return res.status(404).json({ message: "Không tìm thấy thông tin nhà hàng hoặc chủ sở hữu." });
+    }
+
+    const { plan } = await dependencies.getPlanLimits(ownerId);
+    if (!plan || plan.fitScoreEnabled !== true) {
+      return res.status(403).json({
+        error: {
+          code: "FIT_SCORE_NOT_AVAILABLE",
+          message: "Fit Score không khả dụng cho gói dịch vụ này",
+        },
+      });
+    }
+
+    const scores = await dependencies.calculateBatchFitScores(req.body);
+    return res.json({ scores });
+  } catch (error) {
+    console.error("Error calculating batch fit scores:", error);
+    return res.status(500).json({ message: "Lỗi hệ thống khi tính Fit Score." });
+  }
+};
+
+// This static path must be registered before /:dishId/fit-score.
+router.post("/fit-scores", createBatchFitScoreHandler());
 
 // GET /api/dishes/:dishId/fit-score
 router.get("/:dishId/fit-score", async (req, res) => {
