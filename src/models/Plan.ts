@@ -17,6 +17,7 @@ export interface IPlan extends Document {
   personalizedMenuEnabled: boolean;
   advancedAnalyticsEnabled: boolean;
   customerInsightsEnabled: boolean;
+  customerCrmEnabled: boolean;
   features: string[];
   unavailableFeatures: string[];
   isPopular: boolean;
@@ -105,6 +106,10 @@ const PlanSchema = new Schema<IPlan>(
       default: false
     },
     customerInsightsEnabled: {
+      type: Boolean,
+      default: false
+    },
+    customerCrmEnabled: {
       type: Boolean,
       default: false
     },

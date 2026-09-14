@@ -12,6 +12,10 @@
     "test:anonymous-dining": "tsx src/tests/anonymousDiningVisitService.test.ts",
     "test:merchant-insight-isolation": "tsx src/tests/merchantInsightIsolation.test.ts",
     "test:insight-entitlements": "tsx src/tests/insightEntitlements.test.ts",
+    "test:customer-identity": "tsx src/tests/customerIdentityService.test.ts",
+    "test:customer-crm-policy": "tsx src/tests/customerCrmPolicy.test.ts",
+    "test:customer-order-capture": "tsx src/tests/customerOrderCapture.test.ts",
+    "test:customer-crm-routes": "tsx src/tests/customerCrmRoutes.test.ts",
     "test:food-attribute-entitlements": "tsx src/tests/foodAttributeEntitlements.test.ts",
     "test:batch-fit-score": "tsx src/tests/batchFitScoreService.test.ts",
     "test:dining-profile-validation": "tsx src/tests/diningProfileValidation.test.ts",
@@ -20,6 +24,7 @@
     "start": "node dist/index.js",
     "seed:super-admin": "tsx src/scripts/createSuperAdmin.ts",
     "seed:plans": "tsx src/scripts/seedPlans.ts",
+    "migrate:customer-crm-plans": "tsx src/scripts/enableCustomerCrmPlans.ts",
     "fix:notification-encoding": "tsx src/scripts/fixNotificationEncoding.ts"
   },
   "dependencies": {

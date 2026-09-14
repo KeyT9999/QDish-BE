@@ -19,17 +19,35 @@ import { emitNewOrder } from "../realtime/socket.js";
 import { createSystemNotification } from "../services/notificationService.js";
 import { NotificationType, NotificationPriority } from "../models/Notification.js";
 import { User, UserRole } from "../models/User.js";
+import {
+  CustomerIdentityError,
+  recordCustomerOrder,
+  resolveCustomerForOrder
+} from "../services/customerIdentityService.js";
 
 const router = Router();
 
 // Khách hàng đặt món (không cần auth)
 router.post("/", async (req, res) => {
-  const { restaurantId, tableNumber, items, note, customerName, tableSessionId } = req.body as {
+  const {
+    restaurantId,
+    tableNumber,
+    items,
+    note,
+    customerName,
+    customerPhone,
+    marketingConsent,
+    consentVersion,
+    tableSessionId
+  } = req.body as {
     restaurantId?: string;
     tableNumber?: string;
     items?: Array<{ menuItemId: string; name: string; price: number; quantity: number }>;
     note?: string;
     customerName?: string;
+    customerPhone?: string;
+    marketingConsent?: boolean;
+    consentVersion?: string;
     tableSessionId?: string;
   };
 
@@ -42,8 +60,16 @@ router.post("/", async (req, res) => {
   }
 
   const normalizedCustomerName = customerName?.trim();
-  if (normalizedCustomerName && normalizedCustomerName.length < 2) {
-    return res.status(400).json({ message: "Tên khách hàng phải có ít nhất 2 ký tự" });
+  if (normalizedCustomerName && (normalizedCustomerName.length < 2 || normalizedCustomerName.length > 100)) {
+    return res.status(400).json({ message: "Tên khách hàng phải có từ 2 đến 100 ký tự" });
+  }
+
+  if (marketingConsent !== undefined && typeof marketingConsent !== "boolean") {
+    return res.status(400).json({ message: "Trạng thái đồng ý chăm sóc khách hàng không hợp lệ" });
+  }
+
+  if (consentVersion !== undefined && (typeof consentVersion !== "string" || consentVersion.length > 50)) {
+    return res.status(400).json({ message: "Phiên bản nội dung đồng ý không hợp lệ" });
   }
 
   const hasInvalidItem = items.some(item =>
@@ -114,6 +140,27 @@ router.post("/", async (req, res) => {
     }
   }
 
+  let customerLink: Awaited<ReturnType<typeof resolveCustomerForOrder>> = {
+    customer: null,
+    sessionWasLinked: false
+  };
+  try {
+    customerLink = await resolveCustomerForOrder({
+      restaurantId,
+      session,
+      customerName: normalizedCustomerName,
+      customerPhone,
+      marketingConsent,
+      consentVersion
+    });
+  } catch (error) {
+    if (error instanceof CustomerIdentityError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    console.error("Không thể liên kết hồ sơ khách hàng với đơn hàng", error);
+    return res.status(500).json({ message: "Không thể lưu thông tin khách hàng" });
+  }
+
   // Allow placing multiple orders for the same table (customer ordering multiple rounds)
 
   let bill: any;
@@ -152,6 +199,18 @@ router.post("/", async (req, res) => {
     }
     console.error("Loi khi cap nhat bill sau khi tao order:", error);
     return res.status(500).json({ message: "Khong the cap nhat bill", error });
+  }
+
+  if (customerLink.customer) {
+    try {
+      await recordCustomerOrder(
+        customerLink.customer._id,
+        totalAmount,
+        customerLink.sessionWasLinked
+      );
+    } catch (error) {
+      console.error("Không thể cập nhật thống kê hồ sơ khách hàng", error);
+    }
   }
 
   emitNewOrder(restaurantId, order.toJSON());
