@@ -7,8 +7,19 @@ export class AttributeEngine {
    */
   public static applyAllRules(nutrition: ComputedNutrition, context: DishContext): string[] {
     const matched: string[] = [];
+    const hasCompleteNutrition = nutrition.isComplete === true && nutrition.completeness !== undefined && nutrition.completeness > 0;
+    const hasCompleteComposition = hasCompleteNutrition
+      && nutrition.missingIngredientCount === 0
+      && context.ingredients.length > 0;
+
     for (const rule of attributeRules) {
       try {
+        if (rule.requiresCompleteNutrition && !hasCompleteNutrition) {
+          continue;
+        }
+        if (rule.requiresCompleteComposition && !hasCompleteComposition) {
+          continue;
+        }
         if (rule.evaluate(nutrition, context)) {
           matched.push(rule.key);
         }

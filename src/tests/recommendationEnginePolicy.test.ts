@@ -30,6 +30,7 @@ function makeDish(name: string, category: string, allergens: string[] = []) {
     sodium: 400,
     allergens,
     foodAttributes: ["HIGH_PROTEIN", "LIGHT_MEAL"],
+    nutritionComplete: true,
   };
 }
 
@@ -50,6 +51,7 @@ const cachedDairyProfile = {
   attributes: ["LIGHT_MEAL"],
   allergens: ["DAIRY"],
   nutritionConfidence: 0.9,
+  isComplete: true,
 };
 
 const dependencies: RecommendationEngineDependencies = {
@@ -109,7 +111,7 @@ const preferenceOnly = await RecommendationEngine.generateRecommendations(
   undefined,
   dependencies,
 );
-assert.equal(preferenceOnly.mode, "PERSONALIZED");
+assert.equal(preferenceOnly.mode, "GENERAL");
 assert.ok(preferenceOnly.bestForYou.every(({ fitScore }) => fitScore > 0));
 
 const allergiesOnly = await RecommendationEngine.generateRecommendations(

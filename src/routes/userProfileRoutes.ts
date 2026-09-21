@@ -1,14 +1,27 @@
 import { Router } from "express";
 import { UserDiningProfile } from "../models/UserDiningProfile.js";
+import { AuthRequest, requireAuth } from "../middleware/auth.js";
 
 const router = Router();
+
+const requireProfileOwnership = (req: AuthRequest, res: any, next: any) => {
+  if (!req.auth?.sub) {
+    return res.status(401).json({ message: "Không xác định được người dùng" });
+  }
+
+  if (req.auth.sub !== req.params.userId) {
+    return res.status(403).json({ message: "Bạn không có quyền truy cập hồ sơ này" });
+  }
+
+  next();
+};
 
 /**
  * @deprecated Anonymous dining profiles are local-first. Kept temporarily for old clients;
  * Recommendation must not use this route/model as a fallback.
  */
 // GET /api/users/profile/:userId - get or create dining profile (guest-safe)
-router.get("/profile/:userId", async (req, res) => {
+router.get("/profile/:userId", requireAuth, requireProfileOwnership, async (req: AuthRequest, res) => {
   try {
     const { userId } = req.params;
     if (!userId) {
@@ -39,7 +52,7 @@ router.get("/profile/:userId", async (req, res) => {
  * Recommendation must not use this route/model as a fallback.
  */
 // PUT /api/users/profile/:userId - update user dining profile preferences
-router.put("/profile/:userId", async (req, res) => {
+router.put("/profile/:userId", requireAuth, requireProfileOwnership, async (req: AuthRequest, res) => {
   try {
     const { userId } = req.params;
     const { goals, allergies, dietaryPreferences, dailyCalorieTarget } = req.body;
@@ -80,7 +93,7 @@ router.put("/profile/:userId", async (req, res) => {
  * Recommendation must not use this route/model as a fallback.
  */
 // POST /api/users/profile/:userId/onboarding - 3-question quick onboarding setup
-router.post("/profile/:userId/onboarding", async (req, res) => {
+router.post("/profile/:userId/onboarding", requireAuth, requireProfileOwnership, async (req: AuthRequest, res) => {
   try {
     const { userId } = req.params;
     const { goals, allergies, dietaryPreferences } = req.body;

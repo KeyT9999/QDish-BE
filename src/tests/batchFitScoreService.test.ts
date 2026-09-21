@@ -35,6 +35,7 @@ const dependencies: BatchFitScoreDependencies = {
         sodium: 400,
         allergens: [],
         foodAttributes: ["HIGH_PROTEIN", "LOW_SUGAR", "LOW_FAT"],
+        nutritionComplete: true,
       },
       {
         _id: restaurantBDishId,
@@ -49,6 +50,7 @@ const dependencies: BatchFitScoreDependencies = {
         sodium: 0,
         allergens: [],
         foodAttributes: [],
+        nutritionComplete: true,
       },
     ].filter((dish) => dish.restaurantId.equals(query.restaurantId));
   },
@@ -70,6 +72,7 @@ const dependencies: BatchFitScoreDependencies = {
         attributes: ["HIGH_PROTEIN", "LOW_SUGAR", "LOW_FAT"],
         allergens: [],
         nutritionConfidence: 0.95,
+        isComplete: true,
       },
       {
         dishId: restaurantBDishId,
@@ -84,6 +87,7 @@ const dependencies: BatchFitScoreDependencies = {
         attributes: [],
         allergens: [],
         nutritionConfidence: 1,
+        isComplete: true,
       },
     ].filter(
       (profile) =>
@@ -139,6 +143,7 @@ const allergenDependencies: BatchFitScoreDependencies = {
         sodium: 250,
         allergens: ["soy"],
         foodAttributes: ["HIGH_PROTEIN"],
+        nutritionComplete: true,
       },
     ];
   },
@@ -160,6 +165,7 @@ const allergenDependencies: BatchFitScoreDependencies = {
         attributes: ["HIGH_PROTEIN"],
         allergens: [],
         nutritionConfidence: 1,
+        isComplete: true,
       },
     ];
   },

@@ -174,6 +174,10 @@ export class FitScoreEngine {
     return multiplier;
   }
 
+  public static hasActiveContextEffect(scoreType: string, context?: DiningContext): boolean {
+    return this.getContextMultiplier(scoreType, context) !== 1.0;
+  }
+
   /**
    * Applies user goals/preference modifiers.
    */

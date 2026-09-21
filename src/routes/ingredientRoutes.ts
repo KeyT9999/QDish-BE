@@ -3,8 +3,17 @@ import mongoose from "mongoose";
 import { Ingredient } from "../models/Ingredient.js";
 import { IngredientAlias } from "../models/IngredientAlias.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
+import { buildIngredientAccessFilter } from "../services/ingredientAccessService.js";
 
 const router = Router();
+
+const optionalAuth = async (req: AuthRequest, res: any, next: any) => {
+  if (!req.headers.authorization) {
+    return next();
+  }
+
+  return requireAuth(req, res, next);
+};
 
 // Helper to normalize strings (remove Vietnamese accents and punctuation)
 function normalizeString(str: string): string {
@@ -18,9 +27,9 @@ function normalizeString(str: string): string {
 }
 
 // GET /api/ingredients/search?q=...&restaurantId=...
-router.get("/search", async (req, res) => {
+router.get("/search", optionalAuth, async (req: AuthRequest, res) => {
   try {
-    const { q, restaurantId } = req.query as { q?: string; restaurantId?: string };
+    const { q } = req.query as { q?: string };
 
     if (!q || q.trim() === "") {
       return res.json([]);
@@ -47,12 +56,7 @@ router.get("/search", async (req, res) => {
             { slug: { $regex: normalizedQuery, $options: "i" } }
           ]
         },
-        {
-          $or: [
-            { isVerified: true },
-            ...(restaurantId && mongoose.isValidObjectId(restaurantId) ? [{ restaurantId: new mongoose.Types.ObjectId(restaurantId) }] : [])
-          ]
-        },
+        buildIngredientAccessFilter(req.auth?.restaurantId),
         { isActive: true }
       ]
     };
@@ -211,13 +215,13 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       category,
       defaultUnit,
       gramsPerUnit: gramsPerUnit ?? 1,
-      caloriesPer100g: caloriesPer100g ?? 0,
-      proteinPer100g: proteinPer100g ?? 0,
-      carbPer100g: carbPer100g ?? 0,
-      fatPer100g: fatPer100g ?? 0,
-      fiberPer100g: fiberPer100g ?? 0,
-      sugarPer100g: sugarPer100g ?? 0,
-      sodiumPer100g: sodiumPer100g ?? 0,
+      caloriesPer100g,
+      proteinPer100g,
+      carbPer100g,
+      fatPer100g,
+      fiberPer100g,
+      sugarPer100g,
+      sodiumPer100g,
       allergens: allergens ?? [],
       isVerified,
       restaurantId: tenantId,

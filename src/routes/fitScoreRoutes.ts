@@ -89,7 +89,8 @@ router.get("/:dishId/fit-score", async (req, res) => {
 
     return res.json({
       fitScores: profile.fitScores || {},
-      bestFitContext: profile.bestFitContext || ""
+      bestFitContext: profile.bestFitContext || "",
+      isScoreReliable: profile.isComplete === true,
     });
   } catch (error: any) {
     console.error("Error fetching fit score:", error);
@@ -122,6 +123,16 @@ router.post("/:dishId/fit-score", async (req, res) => {
     const profile = await DishNutritionProfile.findOne({ dishId });
     if (!profile) {
       return res.status(404).json({ message: "Không tìm thấy thông tin dinh dưỡng của món ăn." });
+    }
+
+    if (profile.isComplete !== true) {
+      return res.json({
+        fitScores: {},
+        bestFitContext: "nutrition_incomplete",
+        bestFitLabel: "Nutrition data incomplete",
+        bestFitScore: 0,
+        isScoreReliable: false,
+      });
     }
 
     // Construct ComputedNutrition object

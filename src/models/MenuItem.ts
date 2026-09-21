@@ -32,6 +32,9 @@ export interface IMenuItem extends Document {
   sugar?: number;
   sodium?: number;
   confidenceScore?: number;
+  nutritionCompleteness?: number;
+  nutritionComplete?: boolean;
+  missingIngredientCount?: number;
   allergens?: string[];
   foodAttributes?: string[];
 }
@@ -159,6 +162,21 @@ const MenuItemSchema = new Schema<IMenuItem>(
       min: 0
     },
     confidenceScore: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    nutritionCompleteness: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 1
+    },
+    nutritionComplete: {
+      type: Boolean,
+      default: false
+    },
+    missingIngredientCount: {
       type: Number,
       default: 0,
       min: 0
