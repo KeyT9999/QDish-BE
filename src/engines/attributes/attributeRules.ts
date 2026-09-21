@@ -7,12 +7,48 @@ export interface DishContext {
     name: string;
     category: string;
     allergens: string[];
+    attributes?: string[];
   }>;
 }
 
 export interface AttributeRule {
   key: string;
   evaluate: (nutrition: ComputedNutrition, context: DishContext) => boolean;
+  requiresCompleteNutrition?: boolean;
+  requiresCompleteComposition?: boolean;
+}
+
+function hasCanonicalAllergen(allergens: string[], allergen: string): boolean {
+  return allergens.some((value) => value.trim().toUpperCase() === allergen);
+}
+
+function hasExplicitDietaryEvidence(ingredient: DishContext["ingredients"][number], attribute: string): boolean {
+  return ingredient.attributes?.includes(attribute) === true;
+}
+
+function hasNoDietaryConflict(ingredient: DishContext["ingredients"][number], attribute: string): boolean {
+  switch (attribute) {
+    case "VEGAN":
+      return !hasCanonicalAllergen(ingredient.allergens, "DAIRY")
+        && !hasCanonicalAllergen(ingredient.allergens, "EGGS")
+        && !hasCanonicalAllergen(ingredient.allergens, "FISH")
+        && !hasCanonicalAllergen(ingredient.allergens, "SHELLFISH");
+    case "VEGETARIAN":
+      return !hasCanonicalAllergen(ingredient.allergens, "FISH")
+        && !hasCanonicalAllergen(ingredient.allergens, "SHELLFISH");
+    case "GLUTEN_FREE":
+      return !hasCanonicalAllergen(ingredient.allergens, "GLUTEN");
+    case "DAIRY_FREE":
+      return !hasCanonicalAllergen(ingredient.allergens, "DAIRY");
+    default:
+      return false;
+  }
+}
+
+function hasConfirmedDietaryComposition(context: DishContext, attribute: string): boolean {
+  return context.ingredients.every((ingredient) =>
+    hasExplicitDietaryEvidence(ingredient, attribute) && hasNoDietaryConflict(ingredient, attribute)
+  );
 }
 
 /**
@@ -114,46 +150,57 @@ export function isVeganIngredient(name: string, category: string, allergens: str
 export const attributeRules: AttributeRule[] = [
   {
     key: "HIGH_PROTEIN",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.protein >= 25
   },
   {
     key: "VERY_HIGH_PROTEIN",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.protein >= 40
   },
   {
     key: "ENERGY_DENSE",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.calories >= 600
   },
   {
     key: "HEAVY_MEAL",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.calories >= 700 || n.fat >= 25
   },
   {
     key: "LIGHT_MEAL",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.calories <= 400 && n.fat <= 15
   },
   {
     key: "LOW_SUGAR",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.sugar <= 5
   },
   {
     key: "LOW_CALORIE",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.calories <= 400 && n.calories > 0
   },
   {
     key: "HIGH_FIBER",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.fiber >= 6
   },
   {
     key: "LOW_FAT",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.fat <= 10 && n.calories > 0
   },
   {
     key: "HIGH_CARB",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.carb >= 80
   },
   {
     key: "KETO_FRIENDLY",
+    requiresCompleteNutrition: true,
     evaluate: (n) => {
       const totalKcal = n.protein * 4 + n.carb * 4 + n.fat * 9;
       if (totalKcal === 0) return false;
@@ -163,6 +210,7 @@ export const attributeRules: AttributeRule[] = [
   },
   {
     key: "POST_WORKOUT",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.protein >= 25 && n.carb >= 30 && n.carb <= 60
   },
   {
@@ -171,38 +219,35 @@ export const attributeRules: AttributeRule[] = [
   },
   {
     key: "VEGETARIAN",
+    requiresCompleteComposition: true,
     evaluate: (_, ctx) => {
-      if (ctx.ingredients.length === 0) return false;
-      return ctx.ingredients.every((ing) =>
-        isVegetarianIngredient(ing.name, ing.category, ing.allergens)
-      );
+      return hasConfirmedDietaryComposition(ctx, "VEGETARIAN");
     }
   },
   {
     key: "VEGAN",
+    requiresCompleteComposition: true,
     evaluate: (_, ctx) => {
-      if (ctx.ingredients.length === 0) return false;
-      return ctx.ingredients.every((ing) =>
-        isVeganIngredient(ing.name, ing.category, ing.allergens)
-      );
+      return hasConfirmedDietaryComposition(ctx, "VEGAN");
     }
   },
   {
     key: "GLUTEN_FREE",
+    requiresCompleteComposition: true,
     evaluate: (_, ctx) => {
-      if (ctx.ingredients.length === 0) return true;
-      return ctx.ingredients.every((ing) => !ing.allergens.includes("gluten"));
+      return hasConfirmedDietaryComposition(ctx, "GLUTEN_FREE");
     }
   },
   {
     key: "DAIRY_FREE",
+    requiresCompleteComposition: true,
     evaluate: (_, ctx) => {
-      if (ctx.ingredients.length === 0) return true;
-      return ctx.ingredients.every((ing) => !ing.allergens.includes("dairy"));
+      return hasConfirmedDietaryComposition(ctx, "DAIRY_FREE");
     }
   },
   {
     key: "OFFICE_LUNCH",
+    requiresCompleteNutrition: true,
     evaluate: (n) => {
       const isHeavy = n.calories >= 700 || n.fat >= 25;
       return n.calories >= 400 && n.calories <= 700 && !isHeavy;
@@ -210,6 +255,7 @@ export const attributeRules: AttributeRule[] = [
   },
   {
     key: "QUICK_BITE",
+    requiresCompleteNutrition: true,
     evaluate: (n, ctx) => n.calories <= 350 && ctx.servingCount === 1
   },
   {
@@ -218,6 +264,7 @@ export const attributeRules: AttributeRule[] = [
   },
   {
     key: "LATE_NIGHT_FIT",
+    requiresCompleteNutrition: true,
     evaluate: (n) => {
       // Comfort profile but reasonable calories for late night
       const isComfort = n.fat >= 15 && n.carb >= 35;
@@ -226,10 +273,12 @@ export const attributeRules: AttributeRule[] = [
   },
   {
     key: "COMFORT_FOOD",
+    requiresCompleteNutrition: true,
     evaluate: (n) => n.fat >= 20 && n.carb >= 50
   },
   {
     key: "REFRESHING",
+    requiresCompleteNutrition: true,
     evaluate: (n, ctx) => {
       const hasVeg = ctx.ingredients.some(
         (ing) => ing.category === "rau_cu" || ing.category === "vegetable"

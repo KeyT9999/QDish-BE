@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { PayOS } from "@payos/node";
 
 const clientId = process.env.PAYOS_CLIENT_ID;

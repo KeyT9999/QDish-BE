@@ -13,6 +13,9 @@ export interface IDishNutritionProfile extends Document {
   attributes: string[];
   allergens: string[];
   nutritionConfidence: number;
+  completeness: number;
+  isComplete: boolean;
+  missingIngredientCount: number;
   fitScores: Record<string, number>;
   bestFitContext: string;
   calculatedAt: Date;
@@ -33,7 +36,10 @@ const DishNutritionProfileSchema = new Schema<IDishNutritionProfile>(
     sodium: { type: Number, default: 0, min: 0 },
     attributes: { type: [String], default: [] },
     allergens: { type: [String], default: [] },
-    nutritionConfidence: { type: Number, default: 1.0, min: 0, max: 1.0 },
+    nutritionConfidence: { type: Number, default: 0, min: 0, max: 1.0 },
+    completeness: { type: Number, default: 0, min: 0, max: 1.0 },
+    isComplete: { type: Boolean, default: false },
+    missingIngredientCount: { type: Number, default: 0, min: 0 },
     fitScores: { type: Map, of: Number, default: {} },
     bestFitContext: { type: String, default: "" },
     calculatedAt: { type: Date, default: Date.now }

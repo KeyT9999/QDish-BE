@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { NutritionService } from "../services/nutritionService.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
+import { IngredientAccessDeniedError } from "../services/ingredientAccessService.js";
 import {
   isFoodAttributesEnabledForRestaurant,
   serializeNutritionPreviewForFeatures
@@ -27,7 +28,7 @@ router.post("/preview", requireAuth, async (req: AuthRequest, res) => {
     const sc = servingCount && Number(servingCount) > 0 ? Number(servingCount) : 1;
 
     const [preview, foodAttributesEnabled] = await Promise.all([
-      NutritionService.calculateNutrition(ingredients, sc),
+      NutritionService.calculateNutrition(ingredients, sc, restaurantId),
       isFoodAttributesEnabledForRestaurant(restaurantId)
     ]);
     const responseData = serializeNutritionPreviewForFeatures(
@@ -39,6 +40,9 @@ router.post("/preview", requireAuth, async (req: AuthRequest, res) => {
     return res.json(responseData);
   } catch (error: any) {
     console.error("Error previewing nutrition:", error);
+    if (error instanceof IngredientAccessDeniedError) {
+      return res.status(404).json({ message: "Không tìm thấy nguyên liệu" });
+    }
     return res.status(500).json({ message: "Lỗi hệ thống khi tính toán dữ liệu dinh dưỡng" });
   }
 });

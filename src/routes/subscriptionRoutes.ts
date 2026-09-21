@@ -183,12 +183,37 @@ router.get(
   }
 );
 
-// POST /api/owner/subscription/checkout - Tạo link thanh toán PayOS để mua/nâng cấp gói
-router.post(
-  "/owner/subscription/checkout",
-  requireAuth,
-  requireRole(UserRole.RESTAURANT_OWNER as string),
-  async (req: AuthRequest, res) => {
+// ==============================================================================
+// MODULAR HANDLERS & DEPENDENCY INJECTION FOR SUBSCRIPTION CHECKOUT & STATUS
+// ==============================================================================
+
+export interface SubscriptionCheckoutDeps {
+  Plan: any;
+  Subscription: any;
+  PaymentTransaction: any;
+  getOwnerSubscription: (ownerId: string | mongoose.Types.ObjectId) => Promise<any>;
+  isUpgrade: (current: string, next: string) => boolean;
+  createUniqueOrderCode: () => Promise<number>;
+  payOSCreatePayment: (paymentData: any) => Promise<any>;
+  isPayOSConfigured: boolean;
+  appBaseUrl: string;
+}
+
+export function createCheckoutHandler(customDeps?: Partial<SubscriptionCheckoutDeps>) {
+  const deps: SubscriptionCheckoutDeps = {
+    Plan,
+    Subscription,
+    PaymentTransaction,
+    getOwnerSubscription,
+    isUpgrade,
+    createUniqueOrderCode,
+    payOSCreatePayment: (data: any) => payOS.paymentRequests.create(data),
+    isPayOSConfigured,
+    appBaseUrl: process.env.APP_BASE_URL || "http://localhost:5173",
+    ...customDeps
+  };
+
+  return async (req: AuthRequest, res: any) => {
     try {
       const ownerId = req.auth?.sub;
       if (!ownerId) {
@@ -212,7 +237,7 @@ router.post(
       const cycle = billingCycle || BillingCycle.MONTHLY;
 
       // 1. Tìm plan trong DB
-      const plan = await Plan.findById(planId);
+      const plan = await deps.Plan.findById(planId);
       if (!plan) {
         return res.status(404).json({ message: "Gói dịch vụ không tồn tại" });
       }
@@ -223,11 +248,11 @@ router.post(
 
       // ========== UPGRADE-ONLY VALIDATION ==========
       // Lấy subscription hiện tại để kiểm tra hướng chuyển đổi
-      const currentSub = await getOwnerSubscription(ownerId);
+      const currentSub = await deps.getOwnerSubscription(ownerId);
       const currentPlanCode = currentSub.planCode;
 
       // Không cho phép downgrade (PLUS→FREE, PRO→PLUS, PRO→FREE)
-      if (!isUpgrade(currentPlanCode, plan.code) && currentPlanCode !== plan.code) {
+      if (!deps.isUpgrade(currentPlanCode, plan.code) && currentPlanCode !== plan.code) {
         return res.status(400).json({
           message: `Không thể chuyển từ gói ${currentPlanCode} xuống gói ${plan.code}. Nếu muốn hạ gói, vui lòng chờ hết hạn hoặc liên hệ Super Admin.`,
           code: "DOWNGRADE_NOT_ALLOWED"
@@ -239,7 +264,6 @@ router.post(
 
       // 2. Nếu là gói FREE (0đ): Chỉ cho phép nếu chưa có gói hoặc đang FREE
       if (amount === 0) {
-        // Chỉ cho phép chuyển về FREE nếu đang ở FREE (reload) hoặc chưa có gói
         if (currentPlanCode !== "FREE") {
           return res.status(400).json({
             message: `Không thể chuyển từ gói ${currentPlanCode} xuống gói FREE. Vui lòng chờ hết hạn hoặc liên hệ Super Admin.`,
@@ -254,17 +278,9 @@ router.post(
         });
       }
 
-      // 3. Với gói có phí (> 0đ): Tạo PayOS Payment Link
-      // Tạo orderCode unique, bắt buộc là số nguyên (max safe integer là 9007199254740991)
-      if (!isPayOSConfigured) {
-        return res.status(500).json({ message: "Cau hinh PayOS chua day du" });
-      }
-
-      const orderCode = await createUniqueOrderCode();
-
-      const appBaseUrl = process.env.APP_BASE_URL || "http://localhost:5173";
-      
-      // PayOS requirements for description: <= 30 chars, alphanumeric & spaces only
+      // 3. Với gói có phí (> 0đ): Tạo PayOS Payment Link hoặc Sandbox Fallback
+      const orderCode = await deps.createUniqueOrderCode();
+      const appBaseUrl = deps.appBaseUrl;
       const cleanDesc = `QDish SaaS ${plan.code}`.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 30);
 
       const paymentData = {
@@ -282,22 +298,52 @@ router.post(
         ]
       };
 
-      console.log("Creating PayOS subscription checkout", {
+      console.log("Creating subscription checkout", {
         orderCode,
         ownerId,
         planCode: plan.code,
         billingCycle: cycle,
         amount
       });
-      const payosResponse = await payOS.paymentRequests.create(paymentData);
 
-      if (!payosResponse || !payosResponse.checkoutUrl) {
-        return res.status(500).json({ message: "Không tạo được liên kết thanh toán từ PayOS" });
+      let payosResponse: any = null;
+      let isSandbox = false;
+      let gatewayNotice: string | undefined;
+
+      if (deps.isPayOSConfigured) {
+        try {
+          payosResponse = await deps.payOSCreatePayment(paymentData);
+          if (!payosResponse || !payosResponse.checkoutUrl) {
+            throw new Error("Không nhận được liên kết thanh toán từ cổng PayOS");
+          }
+        } catch (payosError: any) {
+          console.warn(`[SubscriptionCheckout] PayOS gateway rejected (code: ${payosError?.code || "N/A"}, message: ${payosError?.message}). Switching to Sandbox Checkout.`);
+          isSandbox = true;
+          gatewayNotice = payosError?.message || "Cổng PayOS tạm thời không khả dụng, đã chuyển sang cổng thử nghiệm Sandbox.";
+        }
+      } else {
+        isSandbox = true;
+        gatewayNotice = "PayOS chưa cấu hình đầy đủ, kích hoạt cổng thanh toán Sandbox.";
       }
 
+      const checkoutUrl = isSandbox
+        ? `${appBaseUrl}/payment-checkout?orderCode=${orderCode}`
+        : payosResponse.checkoutUrl;
+
+      const qrCode = isSandbox
+        ? `https://img.vietqr.io/image/970422-0905123456-compact2.png?amount=${amount}&addInfo=QDISH%20${orderCode}&accountName=QDISH%20SAAS`
+        : payosResponse.qrCode;
+
+      const paymentLinkId = isSandbox
+        ? `sandbox_${orderCode}`
+        : payosResponse.paymentLinkId;
+
+      const paymentStatus = isSandbox
+        ? PaymentStatus.PENDING
+        : (payosResponse.status || PaymentStatus.PENDING);
+
       // 4. Tạo/Cập nhật Subscription dạng PENDING_PAYMENT
-      // Tìm subscription dạng PENDING_PAYMENT trước đó của gói này hoặc tạo mới
-      const subscription = await Subscription.create({
+      const subscription = await deps.Subscription.create({
         ownerId,
         planId: plan._id,
         planCode: plan.code,
@@ -305,44 +351,210 @@ router.post(
         billingCycle: cycle,
         amount,
         paymentOrderCode: orderCode,
-        payosPaymentLinkId: payosResponse.paymentLinkId
+        payosPaymentLinkId: paymentLinkId
       });
 
       // 5. Tạo PaymentTransaction PENDING
-      await PaymentTransaction.create({
+      await deps.PaymentTransaction.create({
         ownerId,
         planId: plan._id,
         subscriptionId: subscription._id,
         orderCode,
         amount,
         status: PaymentStatus.PENDING,
-        paymentLinkId: payosResponse.paymentLinkId,
-        checkoutUrl: payosResponse.checkoutUrl,
-        qrCode: payosResponse.qrCode,
-        payosRawResponse: payosResponse
+        paymentLinkId,
+        checkoutUrl,
+        qrCode,
+        payosRawResponse: isSandbox ? { mode: "SANDBOX_FALLBACK", notice: gatewayNotice } : payosResponse
       });
 
       res.json({
-        checkoutUrl: payosResponse.checkoutUrl,
-        qrCode: payosResponse.qrCode,
-        paymentLinkId: payosResponse.paymentLinkId,
+        checkoutUrl,
+        qrCode,
+        paymentLinkId,
         orderCode,
         amount,
-        status: payosResponse.status
+        status: paymentStatus,
+        isSandbox,
+        gatewayNotice,
+        planName: plan.name,
+        planCode: plan.code
       });
     } catch (error: any) {
       console.error("Lỗi khi tạo checkout subscription:", error);
       res.status(500).json({ message: error.message || "Lỗi hệ thống khi khởi tạo thanh toán" });
     }
-  }
-);
+  };
+}
 
-// GET /api/owner/subscription/payment-status - Kiểm tra và cập nhật trạng thái thanh toán theo orderCode
-router.get(
-  "/owner/subscription/payment-status",
-  requireAuth,
-  requireRole(UserRole.RESTAURANT_OWNER as string),
-  async (req: AuthRequest, res) => {
+export function createCheckoutDetailsHandler(customDeps?: any) {
+  const deps = {
+    PaymentTransaction,
+    Plan,
+    Subscription,
+    ...customDeps
+  };
+
+  return async (req: AuthRequest, res: any) => {
+    try {
+      const ownerId = req.auth?.sub;
+      const { orderCode } = req.query;
+
+      if (!orderCode) {
+        return res.status(400).json({ message: "Thiếu tham số orderCode" });
+      }
+
+      const oCode = Number(orderCode);
+      if (isNaN(oCode)) {
+        return res.status(400).json({ message: "orderCode không hợp lệ" });
+      }
+
+      const transaction = await deps.PaymentTransaction.findOne({ orderCode: oCode, ownerId });
+      if (!transaction) {
+        return res.status(404).json({ message: "Không tìm thấy thông tin giao dịch thanh toán" });
+      }
+
+      const plan = await deps.Plan.findById(transaction.planId);
+      const sub = await deps.Subscription.findById(transaction.subscriptionId);
+
+      const isSandbox = transaction.paymentLinkId?.startsWith("sandbox_") ||
+        Boolean(transaction.payosRawResponse?.mode?.includes("SANDBOX"));
+
+      res.json({
+        orderCode: transaction.orderCode,
+        amount: transaction.amount,
+        status: transaction.status,
+        qrCode: transaction.qrCode,
+        checkoutUrl: transaction.checkoutUrl,
+        isSandbox,
+        plan: plan ? {
+          name: plan.name,
+          code: plan.code,
+          description: plan.description,
+          features: plan.features
+        } : null,
+        billingCycle: sub?.billingCycle || BillingCycle.MONTHLY,
+        createdAt: transaction.createdAt
+      });
+    } catch (error: any) {
+      console.error("Lỗi khi lấy chi tiết thanh toán:", error);
+      res.status(500).json({ message: error.message || "Lỗi hệ thống khi lấy chi tiết thanh toán" });
+    }
+  };
+}
+
+export function createSandboxConfirmHandler(customDeps?: any) {
+  const deps = {
+    PaymentTransaction,
+    activatePaidSubscription,
+    ...customDeps
+  };
+
+  return async (req: AuthRequest, res: any) => {
+    try {
+      const ownerId = req.auth?.sub;
+      const { orderCode } = req.body;
+
+      if (!orderCode) {
+        return res.status(400).json({ message: "Thiếu tham số orderCode" });
+      }
+
+      const oCode = Number(orderCode);
+      if (isNaN(oCode)) {
+        return res.status(400).json({ message: "orderCode không hợp lệ" });
+      }
+
+      const transaction = await deps.PaymentTransaction.findOne({ orderCode: oCode, ownerId });
+      if (!transaction) {
+        return res.status(404).json({ message: "Không tìm thấy giao dịch thanh toán này" });
+      }
+
+      if (transaction.status === PaymentStatus.PAID) {
+        return res.json({
+          success: true,
+          message: "Giao dịch đã được thanh toán và kích hoạt trước đó.",
+          status: "PAID",
+          orderCode: oCode
+        });
+      }
+
+      const sub = await deps.activatePaidSubscription(transaction, {
+        mode: "SANDBOX_CONFIRMED",
+        confirmedAt: new Date(),
+        confirmedBy: ownerId
+      });
+
+      res.json({
+        success: true,
+        message: "Xác nhận thanh toán mô phỏng thành công! Gói dịch vụ đã được kích hoạt.",
+        orderCode: oCode,
+        status: "PAID",
+        subscription: sub
+      });
+    } catch (error: any) {
+      console.error("Lỗi khi xác nhận thanh toán Sandbox:", error);
+      res.status(500).json({ message: error.message || "Lỗi khi xác nhận thanh toán Sandbox" });
+    }
+  };
+}
+
+export function createCancelCheckoutHandler(customDeps?: any) {
+  const deps = {
+    PaymentTransaction,
+    cancelPendingPayment,
+    ...customDeps
+  };
+
+  return async (req: AuthRequest, res: any) => {
+    try {
+      const ownerId = req.auth?.sub;
+      const { orderCode } = req.body;
+
+      if (!orderCode) {
+        return res.status(400).json({ message: "Thiếu tham số orderCode" });
+      }
+
+      const oCode = Number(orderCode);
+      if (isNaN(oCode)) {
+        return res.status(400).json({ message: "orderCode không hợp lệ" });
+      }
+
+      const transaction = await deps.PaymentTransaction.findOne({ orderCode: oCode, ownerId });
+      if (!transaction) {
+        return res.status(404).json({ message: "Không tìm thấy giao dịch thanh toán" });
+      }
+
+      if (transaction.status === PaymentStatus.PAID) {
+        return res.status(400).json({ message: "Giao dịch đã thanh toán thành công, không thể hủy" });
+      }
+
+      await deps.cancelPendingPayment(transaction, {
+        mode: "OWNER_CANCELLED",
+        cancelledAt: new Date()
+      });
+
+      res.json({
+        success: true,
+        message: "Giao dịch đã được hủy bỏ.",
+        status: "CANCELLED"
+      });
+    } catch (error: any) {
+      console.error("Lỗi khi hủy giao dịch thanh toán:", error);
+      res.status(500).json({ message: error.message || "Lỗi khi hủy giao dịch thanh toán" });
+    }
+  };
+}
+
+export function createPaymentStatusHandler(customDeps?: any) {
+  const deps = {
+    PaymentTransaction,
+    payOSGetPayment: (orderCode: number) => payOS.paymentRequests.get(orderCode),
+    activatePaidSubscription,
+    cancelPendingPayment,
+    ...customDeps
+  };
+
+  return async (req: AuthRequest, res: any) => {
     try {
       const { orderCode } = req.query;
       if (!orderCode) {
@@ -356,48 +568,63 @@ router.get(
 
       // 1. Tìm PaymentTransaction trong DB
       const ownerId = req.auth?.sub;
-      const transaction = await PaymentTransaction.findOne({ orderCode: oCode, ownerId });
+      const transaction = await deps.PaymentTransaction.findOne({ orderCode: oCode, ownerId });
       if (!transaction) {
         return res.status(404).json({ message: "Không tìm thấy giao dịch thanh toán này" });
       }
 
-      // 2. Gọi PayOS kiểm tra trạng thái thực tế
+      // 2. Kiểm tra trạng thái đã hoàn tất trong DB
       if (transaction.status === PaymentStatus.PAID) {
         return res.json({
           status: "PAID",
-          message: "Thanh toan da duoc xac nhan va goi da duoc kich hoat."
+          message: "Thanh toán đã được xác nhận và gói đã được kích hoạt."
         });
       }
 
       if (transaction.status === PaymentStatus.CANCELLED || transaction.status === PaymentStatus.FAILED) {
         return res.json({
           status: transaction.status === PaymentStatus.FAILED ? "FAILED" : "CANCELLED",
-          message: "Giao dich da bi huy hoac that bai."
+          message: "Giao dịch đã bị hủy hoặc thất bại."
         });
       }
 
-      const payosInfo = await payOS.paymentRequests.get(oCode);
-      console.log(`PayOS status for order ${oCode}:`, payosInfo.status);
+      // Nếu là giao dịch Sandbox, không gọi PayOS API ngoài
+      const isSandbox = transaction.paymentLinkId?.startsWith("sandbox_") ||
+        Boolean(transaction.payosRawResponse?.mode?.includes("SANDBOX"));
 
-      // 3. Nếu đã thanh toán thành công (PAID)
-      if (payosInfo.status === "PAID") {
-        await activatePaidSubscription(transaction, payosInfo);
+      if (isSandbox) {
         return res.json({
-          status: "PAID",
-          message: "Thanh toan thanh cong va goi da duoc kich hoat!"
-        });
-      }
-      // 4. Nếu bị hủy (CANCELLED)
-      if (payosInfo.status === "CANCELLED" || payosInfo.status === "EXPIRED") {
-        await cancelPendingPayment(transaction, payosInfo);
-
-        return res.json({
-          status: payosInfo.status,
-          message: "Giao dịch đã bị hủy bỏ hoặc hết hạn."
+          status: transaction.status,
+          isSandbox: true,
+          message: "Đang chờ xác nhận thanh toán (Sandbox Demo)."
         });
       }
 
-      // Ngược lại, trả về trạng thái hiện tại (PENDING)
+      // Gọi PayOS kiểm tra trạng thái thực tế
+      try {
+        const payosInfo = await deps.payOSGetPayment(oCode);
+        console.log(`PayOS status for order ${oCode}:`, payosInfo?.status);
+
+        if (payosInfo?.status === "PAID") {
+          await deps.activatePaidSubscription(transaction, payosInfo);
+          return res.json({
+            status: "PAID",
+            message: "Thanh toán thành công và gói đã được kích hoạt!"
+          });
+        }
+
+        if (payosInfo?.status === "CANCELLED" || payosInfo?.status === "EXPIRED") {
+          await deps.cancelPendingPayment(transaction, payosInfo);
+          return res.json({
+            status: payosInfo.status,
+            message: "Giao dịch đã bị hủy bỏ hoặc hết hạn."
+          });
+        }
+      } catch (payosErr: any) {
+        console.warn(`[PaymentStatus] Không thể truy vấn PayOS cho đơn ${oCode}:`, payosErr?.message);
+      }
+
+      // Mặc định trả về trạng thái hiện tại (PENDING)
       res.json({
         status: "PENDING",
         message: "Đang chờ khách hàng thanh toán."
@@ -406,7 +633,47 @@ router.get(
       console.error("Lỗi khi kiểm tra trạng thái thanh toán:", error);
       res.status(500).json({ message: error.message || "Lỗi hệ thống khi kiểm tra trạng thái" });
     }
-  }
+  };
+}
+
+// POST /api/owner/subscription/checkout - Tạo link thanh toán PayOS để mua/nâng cấp gói
+router.post(
+  "/owner/subscription/checkout",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER as string),
+  createCheckoutHandler()
+);
+
+// GET /api/owner/subscription/checkout-details - Lấy chi tiết đơn thanh toán để hiển thị giao diện checkout
+router.get(
+  "/owner/subscription/checkout-details",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER as string),
+  createCheckoutDetailsHandler()
+);
+
+// POST /api/owner/subscription/sandbox-confirm - Xác nhận thanh toán Sandbox để nghiệm thu / demo
+router.post(
+  "/owner/subscription/sandbox-confirm",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER as string),
+  createSandboxConfirmHandler()
+);
+
+// POST /api/owner/subscription/cancel-checkout - Hủy đơn thanh toán subscription
+router.post(
+  "/owner/subscription/cancel-checkout",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER as string),
+  createCancelCheckoutHandler()
+);
+
+// GET /api/owner/subscription/payment-status - Kiểm tra và cập nhật trạng thái thanh toán theo orderCode
+router.get(
+  "/owner/subscription/payment-status",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER as string),
+  createPaymentStatusHandler()
 );
 
 // ==========================================

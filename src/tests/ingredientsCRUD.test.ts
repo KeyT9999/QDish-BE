@@ -11,6 +11,8 @@ import { Restaurant } from "../models/Restaurant.js";
 import { Ingredient } from "../models/Ingredient.js";
 import { IngredientAlias } from "../models/IngredientAlias.js";
 import ingredientRouter from "../routes/ingredientRoutes.js";
+import nutritionRouter from "../routes/nutritionRoutes.js";
+import menuRouter from "../routes/menuRoutes.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
 
@@ -62,6 +64,8 @@ async function run() {
   const app = express();
   app.use(express.json());
   app.use("/api/ingredients", ingredientRouter);
+  app.use("/api/nutrition", nutritionRouter);
+  app.use("/api/menu", menuRouter);
 
   const server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -167,14 +171,109 @@ async function run() {
     assert.ok(searchDataR1.length > 0);
     assert.ok(searchDataR1.some((i: any) => i._id === globalIng._id));
 
-    const searchCustomResR1 = await fetch(`${baseUrl}/search?q=doc quyen&restaurantId=${restaurant1._id}`);
+    const searchCustomResR1 = await fetch(`${baseUrl}/search?q=doc quyen&restaurantId=${restaurant1._id}`, {
+      headers: {
+        Authorization: `Bearer ${owner1Token}`
+      }
+    });
     const searchCustomDataR1 = await searchCustomResR1.json();
     assert.ok(searchCustomDataR1.some((i: any) => i._id === customIng._id));
+
+    // Public search is global-only and must ignore arbitrary tenant IDs.
+    const publicCrossTenantSearchRes = await fetch(`${baseUrl}/search?q=doc quyen&restaurantId=${restaurant1._id}`);
+    const publicCrossTenantSearchData = await publicCrossTenantSearchRes.json();
+    assert.equal(publicCrossTenantSearchData.length, 0);
 
     // Owner 2 searches: should see global but NOT restaurant 1's custom ingredient
     const searchCustomResR2 = await fetch(`${baseUrl}/search?q=doc quyen&restaurantId=${restaurant2._id}`);
     const searchCustomDataR2 = await searchCustomResR2.json();
     assert.equal(searchCustomDataR2.length, 0);
+
+    // Owner 2 must not discover Restaurant 1's custom ingredient by supplying Restaurant 1's ID.
+    const crossTenantSearchRes = await fetch(`${baseUrl}/search?q=doc quyen&restaurantId=${restaurant1._id}`, {
+      headers: {
+        Authorization: `Bearer ${owner2Token}`
+      }
+    });
+    assert.equal(crossTenantSearchRes.status, 403);
+
+    // Nutrition preview must allow Restaurant 1's custom ingredient only for Restaurant 1.
+    const ownNutritionRes = await fetch(`${baseUrl.replace("/ingredients", "/nutrition")}/preview`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${owner1Token}`
+      },
+      body: JSON.stringify({
+        ingredients: [{ ingredientId: customIng._id, quantity: 10, unit: "g" }],
+        servingCount: 1
+      })
+    });
+    assert.equal(ownNutritionRes.status, 200);
+
+    const foreignNutritionRes = await fetch(`${baseUrl.replace("/ingredients", "/nutrition")}/preview`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${owner2Token}`
+      },
+      body: JSON.stringify({
+        ingredients: [{ ingredientId: customIng._id, quantity: 10, unit: "g" }],
+        servingCount: 1
+      })
+    });
+    assert.equal(foreignNutritionRes.status, 404);
+
+    // Menu create/update must reject foreign ingredient IDs before persistence.
+    const foreignMenuCreateRes = await fetch(`${baseUrl.replace("/ingredients", "/menu")}/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${owner2Token}`
+      },
+      body: JSON.stringify({
+        name: `Foreign recipe ${Date.now()}`,
+        price: 100,
+        category: "Test",
+        ingredients: [{ ingredientId: customIng._id, quantity: 10, unit: "g" }]
+      })
+    });
+    assert.equal(foreignMenuCreateRes.status, 404);
+
+    const menuForUpdateRes = await fetch(`${baseUrl.replace("/ingredients", "/menu")}/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${owner2Token}`
+      },
+      body: JSON.stringify({
+        name: `Update recipe ${Date.now()}`,
+        price: 100,
+        category: "Test"
+      })
+    });
+    assert.equal(menuForUpdateRes.status, 201);
+    const menuForUpdate = await menuForUpdateRes.json();
+
+    const foreignMenuUpdateRes = await fetch(`${baseUrl.replace("/ingredients", "/menu")}/${menuForUpdate.id || menuForUpdate._id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${owner2Token}`
+      },
+      body: JSON.stringify({
+        ingredients: [{ ingredientId: customIng._id, quantity: 10, unit: "g" }]
+      })
+    });
+    assert.equal(foreignMenuUpdateRes.status, 404);
+    const menuIdForCleanup = menuForUpdate.id || menuForUpdate._id;
+    const deleteMenuForCleanupRes = await fetch(`${baseUrl.replace("/ingredients", "/menu")}/${menuIdForCleanup}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${owner2Token}`
+      }
+    });
+    assert.equal(deleteMenuForCleanupRes.status, 204);
     console.log("✅ Passed");
 
     // ----------------------------------------------------

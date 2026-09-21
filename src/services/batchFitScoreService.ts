@@ -17,6 +17,7 @@ export interface FitScoreSummary {
   reasons: string[];
   blocked: boolean;
   blockReason?: "allergen";
+  isScoreReliable?: boolean;
 }
 
 export type FitScoreMapResponse = Record<string, FitScoreSummary>;
@@ -34,6 +35,8 @@ export interface BatchMenuItem {
   sodium?: number;
   allergens?: string[];
   foodAttributes?: string[];
+  nutritionComplete?: boolean;
+  nutritionCompleteness?: number;
 }
 
 export interface BatchNutritionProfile {
@@ -49,6 +52,8 @@ export interface BatchNutritionProfile {
   attributes: string[];
   allergens: string[];
   nutritionConfidence: number;
+  isComplete?: boolean;
+  completeness?: number;
 }
 
 export interface MenuItemQuery {
@@ -120,6 +125,12 @@ function nutritionFor(
   };
 }
 
+function hasReliableNutrition(dish: BatchMenuItem, profile?: BatchNutritionProfile): boolean {
+  if (profile) return profile.isComplete === true && profile.completeness !== 0;
+  if (dish.nutritionCompleteness === 0) return false;
+  return dish.nutritionComplete === true;
+}
+
 function buildReasons(
   contextType: string,
   nutrition: ComputedNutrition,
@@ -141,24 +152,22 @@ function buildReasons(
     reasons.push(`Phù hợp sở thích ${matchingAttribute}`);
   }
 
-  if (nutrition.protein >= 20) {
+  if (attributes.includes("HIGH_PROTEIN")) {
     reasons.push(`Giàu đạm (${nutrition.protein}g)`);
-  } else if (nutrition.fiber >= 5) {
+  } else if (attributes.includes("HIGH_FIBER")) {
     reasons.push(`Giàu chất xơ (${nutrition.fiber}g)`);
   } else if (nutrition.calories > 0) {
     reasons.push(`Cung cấp ${nutrition.calories} kcal`);
   }
 
-  if (context?.postWorkout) {
-    reasons.push("Phù hợp sau tập");
-  } else if (context?.timeOfDay === "breakfast") {
-    reasons.push("Phù hợp bữa sáng");
-  } else if (context?.timeOfDay === "lunch") {
-    reasons.push("Phù hợp bữa trưa");
-  } else if (context?.timeOfDay === "dinner") {
-    reasons.push("Phù hợp bữa tối");
-  } else if (context?.timeOfDay === "late_night") {
-    reasons.push("Phù hợp bữa khuya");
+  if (FitScoreEngine.hasActiveContextEffect(contextType, context)) {
+    if (context?.postWorkout) {
+      reasons.push("Phù hợp sau tập");
+    } else if (context?.timeOfDay === "lunch") {
+      reasons.push("Phù hợp bữa trưa");
+    } else if (context?.timeOfDay === "late_night") {
+      reasons.push("Phù hợp bữa khuya");
+    }
   }
 
   return reasons.slice(0, 3);
@@ -185,7 +194,8 @@ export async function calculateBatchFitScores(
   const response: FitScoreMapResponse = {};
 
   for (const dish of dishes) {
-    const nutrition = nutritionFor(dish, profilesByDishId.get(dish._id.toString()));
+    const profile = profilesByDishId.get(dish._id.toString());
+    const nutrition = nutritionFor(dish, profile);
     const attributes = nutrition.attributes;
     const fitScores = FitScoreEngine.calculateAllFitScores(
       nutrition,
@@ -202,6 +212,18 @@ export async function calculateBatchFitScores(
         reasons: ["Món có thành phần xung đột với dị ứng đã chọn"],
         blocked: true,
         blockReason: "allergen",
+      };
+      continue;
+    }
+
+    if (!hasReliableNutrition(dish, profile)) {
+      response[dish._id.toString()] = {
+        score: 0,
+        label: "Nutrition data incomplete",
+        contextType: "nutrition_incomplete",
+        reasons: ["Nutrition data incomplete"],
+        blocked: false,
+        isScoreReliable: false,
       };
       continue;
     }

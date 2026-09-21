@@ -6,6 +6,11 @@ import type {
   RecommendationContextInput,
 } from "../../services/diningProfileValidation.js";
 import { FitScoreEngine } from "../fitScore/FitScoreEngine.js";
+import {
+  findAllergenConflicts,
+  isEligibleForAllergyAwareRecommendation,
+  normalizeAllergenSet
+} from "../../services/allergenSafetyService.js";
 
 export type RecommendationMode = "GENERAL" | "PERSONALIZED";
 export type RecommendationEmptyReason = "NO_AVAILABLE_DISHES" | "NO_ALLERGEN_SAFE_DISHES";
@@ -22,6 +27,7 @@ export interface RecommendedDish {
   bestContextLabel: string;
   reason: string;
   allergenWarnings: string[];
+  isScoreReliable?: boolean;
 }
 
 export interface ScoredDish {
@@ -30,6 +36,7 @@ export interface ScoredDish {
   bestContext: string;
   bestContextLabel: string;
   allergenWarnings: string[];
+  isScoreReliable?: boolean;
 }
 
 export interface PairingSuggestion {
@@ -68,17 +75,13 @@ function emptyResponse(mode: RecommendationMode, emptyReason: RecommendationEmpt
   };
 }
 
-function normalizedAllergens(values: string[] | undefined): string[] {
-  return (values ?? []).map((value) => value.toLowerCase());
-}
-
-function hasAllergenConflict(allergens: string[], userProfile?: DiningProfileSnapshot): boolean {
-  const requestedAllergies = new Set(normalizedAllergens(userProfile?.allergies));
-  return allergens.some((allergen) => requestedAllergies.has(allergen.toLowerCase()));
-}
-
-function generalReason(dish: IMenuItem, primaryScore: number, context?: RecommendationContextInput): string {
-  const timeDescription = context?.timeOfDay ? ` cho bữa ${context.timeOfDay}` : "";
+function generalReason(
+  dish: IMenuItem,
+  primaryScore: number,
+  context?: RecommendationContextInput,
+  hasActiveContextEffect = false,
+): string {
+  const timeDescription = hasActiveContextEffect && context?.timeOfDay ? ` cho bữa ${context.timeOfDay}` : "";
   return `${dish.name} đạt ${primaryScore}% điểm phù hợp${timeDescription}.`;
 }
 
@@ -110,6 +113,12 @@ function isPairingCandidate(dish: IMenuItem): boolean {
   );
 }
 
+function hasReliableNutrition(dish: IMenuItem, profile?: IDishNutritionProfile): boolean {
+  if (profile) return profile.isComplete === true && profile.completeness !== 0;
+  if (dish.nutritionCompleteness === 0) return false;
+  return dish.nutritionComplete === true;
+}
+
 export class RecommendationEngine {
   /**
    * Generates general or personalized dish recommendations and allergen-safe pairing suggestions.
@@ -121,8 +130,7 @@ export class RecommendationEngine {
     dependencies: RecommendationEngineDependencies = defaultDependencies,
   ): Promise<RecommendationResponse> {
     const rId = new mongoose.Types.ObjectId(restaurantId);
-    const mode: RecommendationMode = userProfile
-      && (userProfile.goals.length > 0 || userProfile.preferences.length > 0)
+    const mode: RecommendationMode = FitScoreEngine.resolvePrimaryScoreType(userProfile)
       ? "PERSONALIZED"
       : "GENERAL";
 
@@ -139,11 +147,14 @@ export class RecommendationEngine {
 
     const safeMenuItems = menuItems.filter((dish) => {
       const cachedProfile = profileMap.get(dish._id.toString());
+      if (!isEligibleForAllergyAwareRecommendation(dish, cachedProfile, userProfile)) {
+        return false;
+      }
       const combinedAllergens = [
-        ...normalizedAllergens(dish.allergens),
-        ...normalizedAllergens(cachedProfile?.allergens),
+        ...normalizeAllergenSet(dish.allergens),
+        ...normalizeAllergenSet(cachedProfile?.allergens),
       ];
-      return !hasAllergenConflict(combinedAllergens, userProfile);
+      return findAllergenConflicts(combinedAllergens, userProfile?.allergies).length === 0;
     });
 
     if (safeMenuItems.length === 0) {
@@ -156,9 +167,20 @@ export class RecommendationEngine {
 
     for (const dish of safeMenuItems) {
       const cachedProfile = profileMap.get(dish._id.toString());
+      if (!hasReliableNutrition(dish, cachedProfile)) {
+        fullMenu.push({
+          dish,
+          fitScore: 0,
+          bestContext: "nutrition_incomplete",
+          bestContextLabel: "Nutrition data incomplete",
+          allergenWarnings: [],
+          isScoreReliable: false,
+        });
+        continue;
+      }
       const allergens = [
-        ...normalizedAllergens(dish.allergens),
-        ...normalizedAllergens(cachedProfile?.allergens),
+        ...normalizeAllergenSet(dish.allergens),
+        ...normalizeAllergenSet(cachedProfile?.allergens),
       ];
       const foodAttributes = dish.foodAttributes ?? [];
       const computedNutrition = {
@@ -186,7 +208,12 @@ export class RecommendationEngine {
       const allergenWarnings: string[] = [];
       const reason = mode === "PERSONALIZED"
         ? personalizedReason(primaryScore, selectedContext, computedNutrition.protein)
-        : generalReason(dish, primaryScore, context);
+        : generalReason(
+          dish,
+          primaryScore,
+          context,
+          FitScoreEngine.hasActiveContextEffect(selectedContext, context),
+        );
 
       scoredItems.push({
         dish,
@@ -209,7 +236,9 @@ export class RecommendationEngine {
       .filter((item) => item.fitScore > 0)
       .sort((a, b) => b.fitScore - a.fitScore)
       .slice(0, 3);
-    const sideDishes = safeMenuItems.filter(isPairingCandidate);
+    const sideDishes = safeMenuItems.filter(isPairingCandidate).filter((dish) =>
+      hasReliableNutrition(dish, profileMap.get(dish._id.toString()))
+    );
     const pairingSuggestions: PairingSuggestion[] = [];
 
     for (const recommendation of bestForYou) {

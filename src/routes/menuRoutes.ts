@@ -5,6 +5,10 @@ import { MenuItem } from "../models/MenuItem.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
 import { NutritionService } from "../services/nutritionService.js";
 import {
+  assertIngredientsAccessible,
+  IngredientAccessDeniedError
+} from "../services/ingredientAccessService.js";
+import {
   isFoodAttributesEnabledForRestaurant,
   serializeMenuItemForFeatures
 } from "../services/foodAttributeEntitlementService.js";
@@ -87,6 +91,17 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     return res
       .status(400)
       .json({ message: "Thiếu name/price/category khi thêm món" });
+  }
+
+  if (Array.isArray(ingredients)) {
+    try {
+      await assertIngredientsAccessible(ingredients, restaurantId);
+    } catch (error) {
+      if (error instanceof IngredientAccessDeniedError) {
+        return res.status(404).json({ message: "KhÃ´ng tÃ¬m tháº¥y nguyÃªn liá»‡u" });
+      }
+      throw error;
+    }
   }
 
   let resolvedCategoryId = categoryId;
@@ -195,6 +210,22 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (servingSizeGrams !== undefined) update.servingSizeGrams = servingSizeGrams;
   if (cookingMethod !== undefined) update.cookingMethod = cookingMethod;
 
+  const recipeChanged =
+    ingredients !== undefined ||
+    servingCount !== undefined ||
+    cookingMethod !== undefined;
+
+  if (Array.isArray(ingredients)) {
+    try {
+      await assertIngredientsAccessible(ingredients, restaurantId);
+    } catch (error) {
+      if (error instanceof IngredientAccessDeniedError) {
+        return res.status(404).json({ message: "KhÃ´ng tÃ¬m tháº¥y nguyÃªn liá»‡u" });
+      }
+      throw error;
+    }
+  }
+
   const item = await MenuItem.findOneAndUpdate(
     { _id: req.params.id, restaurantId },
     update,
@@ -205,11 +236,13 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     return res.status(404).json({ message: "Không tìm thấy món ăn" });
   }
 
-  // Recalculate and update the cache profile
-  try {
-    await NutritionService.calculateDishNutrition(item._id);
-  } catch (err) {
-    console.error("[menuRoutes] Nutrition calculation failed for updated item:", (err as Error).message);
+  // Recalculate only when recipe inputs changed; metadata/status updates preserve the cache.
+  if (recipeChanged) {
+    try {
+      await NutritionService.calculateDishNutrition(item._id);
+    } catch (err) {
+      console.error("[menuRoutes] Nutrition calculation failed for updated item:", (err as Error).message);
+    }
   }
 
   // Reload item to get updated nutrition cache fields

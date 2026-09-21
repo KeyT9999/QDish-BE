@@ -45,6 +45,9 @@ interface MenuItemResponseSource {
   sugar?: number;
   sodium?: number;
   confidenceScore?: number;
+  nutritionCompleteness?: number;
+  nutritionComplete?: boolean;
+  missingIngredientCount?: number;
   foodAttributes?: string[];
   allergens?: string[];
 }
@@ -64,7 +67,10 @@ export function serializeMenuItemForFeatures<T extends MenuItemResponseSource>(
       fiber: item.fiber ?? 0,
       sugar: item.sugar ?? 0,
       sodium: item.sodium ?? 0,
-      confidenceScore: item.confidenceScore ?? 0
+      confidenceScore: item.confidenceScore ?? 0,
+      completeness: item.nutritionCompleteness ?? 0,
+      isComplete: item.nutritionComplete ?? false,
+      missingIngredientCount: item.missingIngredientCount ?? 0
     },
     foodAttributes: foodAttributesEnabled
       ? item.foodAttributes ?? []
@@ -100,6 +106,9 @@ export function serializeNutritionPreviewForFeatures(
     servingCount,
     attributes: foodAttributesEnabled ? preview.attributes : [],
     allergens: preview.allergens,
-    confidence: preview.nutritionConfidence
+    confidence: preview.nutritionConfidence,
+    completeness: preview.completeness ?? 0,
+    isComplete: preview.isComplete ?? false,
+    missingIngredientCount: preview.missingIngredientCount ?? 0
   };
 }
