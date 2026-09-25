@@ -33,11 +33,11 @@
 - `kurumiDaNangMenuSnapshot` exports the checked-in source sections and source metadata from `src/scripts/kurumiDaNangMenuSnapshot.ts`.
 - `buildMenuItemListingPatch(item, categoryId)` returns only the listing fields to set, excluding recipe and nutrition fields.
 
-- [ ] Write a failing Node-assert test proving that six add-on sections collapse to `Gọi thêm`, identical rows deduplicate, distinct-price rows remain distinct, malformed prices/URLs are rejected, and the official snapshot normalizes to 25 categories / 181 items.
-- [ ] Run `npx tsx src/tests/kurumiMenuSeedData.test.ts`; expect failure because the normalizer and snapshot do not exist yet.
-- [ ] Add the official structured-data TypeScript snapshot and pure normalizer; allow image URLs only when they use HTTPS and the exact `kurumi.vn` host.
-- [ ] Re-run the focused test and `npm run build`; expect both to pass.
-- [ ] Review the snapshot diff for external hosts, duplicate item keys, malformed prices, missing descriptions, and non-menu data.
+- [x] Write a failing Node-assert test proving that six add-on sections collapse to `Gọi thêm`, identical rows deduplicate, distinct-price rows remain distinct, malformed prices/URLs are rejected, and the official snapshot normalizes to 25 categories / 181 items.
+- [x] Run `npx tsx src/tests/kurumiMenuSeedData.test.ts`; verified the expected initial module-not-found failure.
+- [x] Add the official structured-data TypeScript snapshot and pure normalizer; allow image URLs only when they use HTTPS and the exact `kurumi.vn` host.
+- [x] Re-run the focused test and `npm run build`; both pass.
+- [x] Review the snapshot diff for external hosts, duplicate item keys, malformed prices, missing descriptions, and non-menu data; one malformed source image was cleared rather than imported.
 
 ### Task 2: Guarded idempotent MongoDB importer
 
