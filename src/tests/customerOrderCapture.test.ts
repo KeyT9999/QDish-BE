@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 
 import {
+  buildCustomerOrderStatsPipeline,
   CustomerIdentityError,
   resolveCustomerForOrder
 } from "../services/customerIdentityService.js";
@@ -135,11 +136,27 @@ async function testRejectsChangingCustomerInsideOneSession() {
   );
 }
 
+function testCustomerOrderStatsUpdateIsIdempotentAndBounded() {
+  const orderId = "order-123";
+  const pipeline = buildCustomerOrderStatsPipeline(orderId, 50_000, true, new Date("2026-09-25T00:00:00.000Z"));
+  const update = pipeline[0].$set as Record<string, any>;
+
+  assert.deepEqual(update.orderCount.$cond[0], {
+    $in: [orderId, { $ifNull: ["$processedOrderStatsKeys", []] }]
+  });
+  assert.equal(update.orderCount.$cond[2].$add[1], 1);
+  assert.equal(update.totalSpend.$cond[2].$add[1], 50_000);
+  assert.equal(update.visitCount.$cond[2].$add[1], 1);
+  assert.equal(update.processedOrderStatsKeys.$cond[2].$slice[1], -2048);
+  assert.equal(update.processedOrderStatsKeys.$cond[1].$ifNull[0], "$processedOrderStatsKeys");
+}
+
 async function run() {
   await testBlankPhoneDoesNotCreateCustomer();
   await testBlankPhoneKeepsUsingCustomerAlreadyLinkedToSession();
   await testEquivalentPhoneFormatsReuseOneRestaurantCustomer();
   await testRejectsChangingCustomerInsideOneSession();
+  testCustomerOrderStatsUpdateIsIdempotentAndBounded();
   console.log("customer order capture tests passed");
 }
 

@@ -55,6 +55,7 @@ interface CreateSystemNotificationParams {
   paymentTransactionId?: string | Types.ObjectId;
   actionUrl?: string;
   metadata?: Record<string, unknown>;
+  idempotencyKey?: string;
 }
 
 // ──────────────────────────────────────────
@@ -424,13 +425,14 @@ export async function createSystemNotification(params: CreateSystemNotificationP
     subscriptionId,
     paymentTransactionId,
     actionUrl,
-    metadata
+    metadata,
+    idempotencyKey
   } = params;
 
   if (!recipientUserIds.length) return null;
 
   // Create notification record
-  const notification = await Notification.create({
+  const notificationDocument = {
     title,
     message,
     type,
@@ -457,8 +459,18 @@ export async function createSystemNotification(params: CreateSystemNotificationP
       ? typeof paymentTransactionId === "string" ? new Types.ObjectId(paymentTransactionId) : paymentTransactionId
       : undefined,
     actionUrl,
-    metadata
-  });
+    metadata,
+    idempotencyKey
+  };
+  const notification = idempotencyKey
+    ? await Notification.findOneAndUpdate(
+      { idempotencyKey },
+      { $setOnInsert: notificationDocument },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+    : await Notification.create(notificationDocument);
+
+  if (!notification) throw new Error("Không thể lưu thông báo hệ thống");
 
   // Fetch user roles for recipients
   const users = await User.find({

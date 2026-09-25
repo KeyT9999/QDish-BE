@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { createServer } from "http";
+import { randomUUID } from "node:crypto";
 
 import { createCorsOptions } from "./config/cors.js";
 import { connectDB } from "./config/db.js";
@@ -31,6 +32,7 @@ import customerRoutes from "./routes/customerRoutes.js";
 import billRoutes from "./routes/billRoutes.js";
 import { initRealtime } from "./realtime/socket.js";
 import { initSubscriptionCronJob } from "./services/subscriptionCronJob.js";
+import { initOrderSideEffectsWorker } from "./services/orderSideEffectsWorker.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -39,6 +41,13 @@ const corsOptions = createCorsOptions();
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
+app.use((req, res, next) => {
+  const candidate = req.header("x-request-id") || "";
+  const requestId = /^[A-Za-z0-9._-]{1,80}$/.test(candidate) ? candidate : randomUUID();
+  res.locals.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  next();
+});
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
@@ -85,6 +94,7 @@ app.use("/api/recommendations", recommendationRoutes);
 connectDB().then(() => {
   initRealtime(httpServer);
   initSubscriptionCronJob();
+  initOrderSideEffectsWorker();
 
   httpServer.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
-import { createRestaurantSocketAccessService } from "../services/restaurantSocketAccessService.js";
+import {
+  createRestaurantBranchSocketAccessService,
+  createRestaurantSocketAccessService
+} from "../services/restaurantSocketAccessService.js";
 
 async function run() {
   const ownerId = new mongoose.Types.ObjectId();
@@ -51,6 +54,71 @@ async function run() {
   assert.equal(admittedWhileLocked, true, "a socket must join its room before releasing the owner lease");
 
   await activeAccess({ sub: "owner-user", role: "RESTAURANT_OWNER" }, () => {});
+
+  const branchRestaurantId = new mongoose.Types.ObjectId();
+  const branchOwnerId = new mongoose.Types.ObjectId();
+  const branchRecord: {
+    ownerId: mongoose.Types.ObjectId;
+    archivedAt: Date | null;
+    status: string;
+    active: boolean;
+  } = {
+    ownerId: branchOwnerId,
+    archivedAt: null,
+    status: "ACTIVE",
+    active: true
+  };
+  let joinedAuthorizedBranch = false;
+  let branchLeaseOwner = "";
+  const branchAccess = createRestaurantBranchSocketAccessService({
+    Restaurant: {
+      findById: async () => branchRecord
+    } as any,
+    withQuotaLease: async (id: string, work: (lease: { assertHeld(): Promise<void> }) => Promise<unknown>) => {
+      branchLeaseOwner = id;
+      return work({ assertHeld: async () => {} });
+    }
+  } as any);
+
+  await branchAccess(
+    { sub: branchOwnerId.toString(), role: "RESTAURANT_OWNER" },
+    branchRestaurantId.toString(),
+    () => { joinedAuthorizedBranch = true; }
+  );
+  assert.equal(joinedAuthorizedBranch, true, "an owner must be able to subscribe to an owned selected branch");
+  assert.equal(branchLeaseOwner, branchOwnerId.toString(), "owner branch admission must coordinate with archive using the owner lease");
+
+  let joinedForeignBranch = false;
+  await assert.rejects(
+    branchAccess(
+      { sub: new mongoose.Types.ObjectId().toString(), role: "RESTAURANT_OWNER" },
+      branchRestaurantId.toString(),
+      () => { joinedForeignBranch = true; }
+    ),
+    (error: any) => error.code === "FORBIDDEN"
+  );
+  assert.equal(joinedForeignBranch, false, "an owner must never join another owner's branch room");
+
+  let joinedWrongStaffBranch = false;
+  await assert.rejects(
+    branchAccess(
+      { sub: "staff-user", role: "STAFF", restaurantId: new mongoose.Types.ObjectId().toString() },
+      branchRestaurantId.toString(),
+      () => { joinedWrongStaffBranch = true; }
+    ),
+    (error: any) => error.code === "FORBIDDEN"
+  );
+  assert.equal(joinedWrongStaffBranch, false, "staff must not choose a branch by client payload");
+
+  branchRecord.archivedAt = new Date();
+  await assert.rejects(
+    branchAccess(
+      { sub: branchOwnerId.toString(), role: "RESTAURANT_OWNER" },
+      branchRestaurantId.toString(),
+      () => assert.fail("an archived branch must not admit an owner socket")
+    ),
+    (error: any) => error.code === "RESTAURANT_ARCHIVED"
+  );
 }
 
 run().then(() => console.log("restaurant socket access tests passed")).catch((error) => {
