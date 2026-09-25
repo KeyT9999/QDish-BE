@@ -159,7 +159,7 @@ export async function getOwnerUsage(ownerId: string | mongoose.Types.ObjectId): 
   const oid = typeof ownerId === "string" ? new mongoose.Types.ObjectId(ownerId) : ownerId;
 
   // 1. Số nhà hàng
-  const restaurantCount = await Restaurant.countDocuments({ ownerId: oid });
+  const restaurantCount = await Restaurant.countDocuments({ ownerId: oid, archivedAt: null });
 
   // Lấy danh sách ID của tất cả nhà hàng của owner này
   const restaurants = await Restaurant.find({ ownerId: oid }).select("_id");

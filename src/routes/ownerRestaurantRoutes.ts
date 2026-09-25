@@ -8,6 +8,7 @@ import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import { Order, OrderStatus } from "../models/Order.js";
 import { Category } from "../models/Category.js";
 import { MenuItem } from "../models/MenuItem.js";
+import { RestaurantArchiveError, restaurantArchiveService } from "../services/restaurantArchiveService.js";
 import {
   deleteCloudinaryImage,
   isCloudinaryConfigured,
@@ -66,6 +67,11 @@ const findOwnedRestaurant = async (ownerId: string | undefined, restaurantId: st
     ownerId: new mongoose.Types.ObjectId(ownerId)
   });
 };
+
+export const ownerRestaurantListFilter = (ownerId: string, archived: unknown) => ({
+  ownerId: new mongoose.Types.ObjectId(ownerId),
+  archivedAt: archived === "true" ? { $ne: null } : null
+});
 
 // 1. Tạo nhà hàng mới + tài khoản Admin nhà hàng
 router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
@@ -184,9 +190,8 @@ router.get("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), a
       return res.status(403).json({ message: "Không xác định được chủ sở hữu" });
     }
 
-    const restaurants = await Restaurant.find({
-      ownerId: new mongoose.Types.ObjectId(ownerId)
-    }).sort({ createdAt: -1 });
+    const restaurants = await Restaurant.find(ownerRestaurantListFilter(ownerId, req.query.archived))
+      .sort({ createdAt: -1 });
 
     const { getPlanLimits } = await import("../services/subscriptionService.js");
     let planFeatures = {
@@ -274,6 +279,30 @@ router.get("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), a
   } catch (error) {
     console.error("Lỗi khi lấy danh sách nhà hàng của chủ sở hữu:", error);
     res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi tải danh sách chi nhánh", error });
+  }
+});
+
+router.delete("/:restaurantId", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
+  try {
+    return res.json(await restaurantArchiveService.archive(req.auth?.sub || "", req.params.restaurantId));
+  } catch (error) {
+    if (error instanceof RestaurantArchiveError) {
+      return res.status(error.statusCode).json(error.toResponse());
+    }
+    console.error("Lỗi khi lưu trữ chi nhánh:", error);
+    return res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi lưu trữ chi nhánh" });
+  }
+});
+
+router.post("/:restaurantId/restore", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
+  try {
+    return res.json(await restaurantArchiveService.restore(req.auth?.sub || "", req.params.restaurantId));
+  } catch (error) {
+    if (error instanceof RestaurantArchiveError) {
+      return res.status(error.statusCode).json(error.toResponse());
+    }
+    console.error("Lỗi khi khôi phục chi nhánh:", error);
+    return res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi khôi phục chi nhánh" });
   }
 });
 
