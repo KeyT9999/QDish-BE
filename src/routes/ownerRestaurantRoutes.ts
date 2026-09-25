@@ -135,19 +135,30 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
     const creation = await withOwnerRestaurantQuotaLease(ownerId, async lease => {
       const limitError = await checkPlanLimit(ownerId, "RESTAURANT_LIMIT");
       if (limitError) return { limitError, restaurant: null };
-      await lease.assertHeld();
-      const restaurant = await Restaurant.create({
-        name: restaurantName.trim(),
-        username: restaurantUsername.trim().toLowerCase(),
-        ownerName,
-        email: restaurantEmail.trim().toLowerCase(),
-        address: address.trim(),
-        phone: restaurantPhone.trim(),
-        status: RestaurantStatus.ACTIVE,
-        active: true,
-        ownerId: new mongoose.Types.ObjectId(ownerId)
-      });
-      return { limitError: null, restaurant };
+      const reservation = await lease.reserveRestaurantSlot();
+      let writeStarted = false;
+      try {
+        await lease.assertHeld();
+        writeStarted = true;
+        const restaurant = await Restaurant.create({
+          name: restaurantName.trim(),
+          username: restaurantUsername.trim().toLowerCase(),
+          ownerName,
+          email: restaurantEmail.trim().toLowerCase(),
+          address: address.trim(),
+          phone: restaurantPhone.trim(),
+          status: RestaurantStatus.ACTIVE,
+          active: true,
+          ownerId: new mongoose.Types.ObjectId(ownerId)
+        });
+        try { await reservation.release(); } catch { /* Reservation expires if cleanup is temporarily unavailable. */ }
+        return { limitError: null, restaurant };
+      } catch (error) {
+        if (!writeStarted) {
+          try { await reservation.release(); } catch { /* Reservation expires if cleanup is temporarily unavailable. */ }
+        }
+        throw error;
+      }
     });
     if (creation.limitError) {
       return res.status(403).json({
@@ -298,6 +309,9 @@ router.delete("/:restaurantId", requireOwnerArchiveAuth, requireRole(UserRole.RE
   } catch (error) {
     if (error instanceof RestaurantArchiveError) {
       return res.status(error.statusCode).json(error.toResponse());
+    }
+    if (error instanceof OwnerRestaurantQuotaLeaseError) {
+      return res.status(503).json({ message: error.message, code: "RESTAURANT_QUOTA_BUSY" });
     }
     console.error("Lỗi khi lưu trữ chi nhánh:", error);
     return res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi lưu trữ chi nhánh" });

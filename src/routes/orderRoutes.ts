@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Order, OrderStatus } from "../models/Order.js";
+import { Order, OrderStatus, type IOrder } from "../models/Order.js";
 import mongoose from "mongoose";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { Table } from "../models/Table.js";
@@ -24,6 +24,8 @@ import {
   recordCustomerOrder,
   resolveCustomerForOrder
 } from "../services/customerIdentityService.js";
+import { OwnerRestaurantQuotaLeaseError } from "../services/ownerRestaurantQuotaLeaseService.js";
+import { RestaurantNotAcceptingOrdersError, withActiveRestaurantOrderWrite } from "../services/restaurantOrderWriteService.js";
 
 const router = Router();
 
@@ -86,7 +88,7 @@ router.post("/", async (req, res) => {
   }
 
   const restaurant = await Restaurant.findById(restaurantId);
-  if (!restaurant || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
+  if (!restaurant || restaurant.archivedAt || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
     return res.status(404).json({ message: "Không tìm thấy nhà hàng đang hoạt động" });
   }
 
@@ -176,29 +178,38 @@ router.post("/", async (req, res) => {
 
   const totalAmount = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  const order = await Order.create({
-    restaurantId: new mongoose.Types.ObjectId(restaurantId),
-    tableNumber,
-    tableSessionId: session ? session._id : undefined,
-    billId: bill._id,
-    sessionCode: session ? session.sessionCode : undefined,
-    billCode: bill.billCode,
-    billStatus: bill.status,
-    items,
-    totalAmount,
-    status: OrderStatus.PENDING,
-    note,
-    customerName: normalizedCustomerName || undefined
-  });
-
+  let order: IOrder;
   try {
-    bill = await appendOrderToBill(order, session);
+    order = await withActiveRestaurantOrderWrite(restaurant._id, restaurant.ownerId, async () => {
+      const createdOrder = await Order.create({
+        restaurantId: new mongoose.Types.ObjectId(restaurantId),
+        tableNumber,
+        tableSessionId: session ? session._id : undefined,
+        billId: bill._id,
+        sessionCode: session ? session.sessionCode : undefined,
+        billCode: bill.billCode,
+        billStatus: bill.status,
+        items,
+        totalAmount,
+        status: OrderStatus.PENDING,
+        note,
+        customerName: normalizedCustomerName || undefined
+      });
+      bill = await appendOrderToBill(createdOrder, session);
+      return createdOrder;
+    });
   } catch (error) {
+    if (error instanceof RestaurantNotAcceptingOrdersError) {
+      return res.status(404).json({ message: "Không tìm thấy nhà hàng đang hoạt động" });
+    }
+    if (error instanceof OwnerRestaurantQuotaLeaseError) {
+      return res.status(503).json({ message: "Nhà hàng đang xử lý thao tác khác. Vui lòng thử lại.", code: "RESTAURANT_BUSY" });
+    }
     if (error instanceof BillLifecycleError) {
       return res.status(error.statusCode).json({ message: error.message });
     }
-    console.error("Loi khi cap nhat bill sau khi tao order:", error);
-    return res.status(500).json({ message: "Khong the cap nhat bill", error });
+    console.error("Lỗi khi tạo order trong nhà hàng", error);
+    return res.status(500).json({ message: "Không thể lưu đơn hàng" });
   }
 
   if (customerLink.customer) {

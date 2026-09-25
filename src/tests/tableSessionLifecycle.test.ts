@@ -91,6 +91,28 @@ async function testResolveRepairsClosedActiveSession() {
   assert.notEqual(result.session._id.toString(), ids.closedSession.toString());
 }
 
+async function testResolveRejectsArchivedRestaurantBeforeCreatingSession() {
+  let tableReads = 0;
+  let sessionCreates = 0;
+  await assert.rejects(resolveTableSession({
+    restaurantId: ids.restaurant.toString(),
+    tableNumber: "15"
+  }, {
+    Restaurant: { findById: async () => ({ archivedAt: new Date() }) },
+    Table: {
+      findOne: async () => { tableReads++; return { _id: ids.table, code: "15", isActive: true }; },
+      findByIdAndUpdate: async (_id: any, update: any) => ({ _id: ids.table, ...update })
+    },
+    TableSession: {
+      findOne: async () => null,
+      create: async () => { sessionCreates++; return {}; }
+    },
+    Order: { find: async () => [] }
+  } as any), (error: any) => error.statusCode === 404);
+  assert.equal(tableReads, 0, "archived restaurants are rejected before table/session work");
+  assert.equal(sessionCreates, 0, "archived restaurants cannot open customer sessions");
+}
+
 async function testCloseSessionMarksPaidAndReleasesTable() {
   const table: any = makeDoc({
     _id: ids.table,
@@ -262,6 +284,7 @@ async function testCustomerHistoryIsScopedToActiveSession() {
 
 async function run() {
   await testResolveRepairsClosedActiveSession();
+  await testResolveRejectsArchivedRestaurantBeforeCreatingSession();
   await testCloseSessionMarksPaidAndReleasesTable();
   await testCustomerHistoryIsScopedToActiveSession();
   console.log("tableSessionLifecycle regression tests passed");

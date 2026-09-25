@@ -81,9 +81,9 @@ router.get("/public/:id", async (req, res) => {
     }
 
     const restaurant = await Restaurant.findById(id)
-      .select("_id id name address phone status active bankAccount bankName ownerId");
+      .select("_id id name address phone status active bankAccount bankName ownerId archivedAt");
 
-    if (!restaurant || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
+    if (!restaurant || restaurant.archivedAt || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
       return res.status(404).json({ message: "Không tìm thấy nhà hàng" });
     }
 

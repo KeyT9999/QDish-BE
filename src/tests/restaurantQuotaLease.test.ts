@@ -7,6 +7,7 @@ const ownerId = "507f1f77bcf86cd799439011";
 
 async function run() {
   let holder: { token: string; expiresAt: Date } | null = null;
+  let reservation: { token: string; expiresAt: Date } | null = null;
   const store = {
     async tryAcquire(_ownerId: string, token: string, expiresAt: Date, now: Date) {
       if (holder && holder.expiresAt > now) return false;
@@ -23,6 +24,26 @@ async function run() {
     },
     async release(_ownerId: string, token: string) {
       if (holder?.token === token) holder = null;
+    },
+    async reserve(_ownerId: string, leaseToken: string, reservationToken: string, expiresAt: Date, now: Date) {
+      if (!holder || holder.token !== leaseToken || holder.expiresAt <= now) return false;
+      if (reservation && reservation.expiresAt > now) return false;
+      reservation = { token: reservationToken, expiresAt };
+      return true;
+    },
+    async renewReservation(_ownerId: string, reservationToken: string, expiresAt: Date, now: Date) {
+      if (!reservation || reservation.token !== reservationToken || reservation.expiresAt <= now) return false;
+      reservation.expiresAt = expiresAt;
+      return true;
+    },
+    async isReservationHeld(_ownerId: string, reservationToken: string, now: Date) {
+      return !!reservation && reservation.token === reservationToken && reservation.expiresAt > now;
+    },
+    async releaseReservation(_ownerId: string, reservationToken: string) {
+      if (reservation?.token === reservationToken) reservation = null;
+    },
+    async countReservations(_ownerId: string, now: Date) {
+      return reservation && reservation.expiresAt > now ? 1 : 0;
     }
   };
   const firstProcess = createOwnerRestaurantQuotaLeaseService(store, { leaseMs: 150, renewMs: 30, retryMs: 5, waitMs: 1000 });
@@ -65,6 +86,82 @@ async function run() {
   assert.equal(restaurantCount, 1);
   assert.equal(maxActiveOperations, 1);
   assert.equal(holder, null);
+
+  let stalledHolder: { token: string; expiresAt: Date } | null = null;
+  let stalledReservation: { token: string; expiresAt: Date } | null = null;
+  let firstLeaseToken = "";
+  const stalledStore = {
+    async tryAcquire(_ownerId: string, token: string, expiresAt: Date, now: Date) {
+      if (stalledHolder && stalledHolder.expiresAt > now) return false;
+      stalledHolder = { token, expiresAt };
+      if (!firstLeaseToken) firstLeaseToken = token;
+      return true;
+    },
+    async renew(_ownerId: string, token: string, expiresAt: Date, now: Date) {
+      if (token === firstLeaseToken) return false;
+      if (!stalledHolder || stalledHolder.token !== token || stalledHolder.expiresAt <= now) return false;
+      stalledHolder.expiresAt = expiresAt;
+      return true;
+    },
+    async isHeld(_ownerId: string, token: string, now: Date) {
+      return !!stalledHolder && stalledHolder.token === token && stalledHolder.expiresAt > now;
+    },
+    async release(_ownerId: string, token: string) {
+      if (stalledHolder?.token === token) stalledHolder = null;
+    },
+    async reserve(_ownerId: string, leaseToken: string, reservationToken: string, expiresAt: Date, now: Date) {
+      if (!stalledHolder || stalledHolder.token !== leaseToken || stalledHolder.expiresAt <= now) return false;
+      if (stalledReservation && stalledReservation.expiresAt > now) return false;
+      stalledReservation = { token: reservationToken, expiresAt };
+      return true;
+    },
+    async renewReservation(_ownerId: string, reservationToken: string, expiresAt: Date, now: Date) {
+      if (!stalledReservation || stalledReservation.token !== reservationToken || stalledReservation.expiresAt <= now) return false;
+      stalledReservation.expiresAt = expiresAt;
+      return true;
+    },
+    async isReservationHeld(_ownerId: string, reservationToken: string, now: Date) {
+      return !!stalledReservation && stalledReservation.token === reservationToken && stalledReservation.expiresAt > now;
+    },
+    async releaseReservation(_ownerId: string, reservationToken: string) {
+      if (stalledReservation?.token === reservationToken) stalledReservation = null;
+    },
+    async countReservations(_ownerId: string, now: Date) {
+      return stalledReservation && stalledReservation.expiresAt > now ? 1 : 0;
+    }
+  };
+  const stalledProcess = createOwnerRestaurantQuotaLeaseService(stalledStore, {
+    leaseMs: 70, renewMs: 15, retryMs: 5, waitMs: 500
+  });
+  const competingProcess = createOwnerRestaurantQuotaLeaseService(stalledStore, {
+    leaseMs: 70, renewMs: 15, retryMs: 5, waitMs: 500
+  });
+  let durableBranches = 0;
+  let finishStalledWrite!: () => void;
+  const stalledWriteGate = new Promise<void>(resolve => { finishStalledWrite = resolve; });
+  let reservationCreated!: () => void;
+  const reservationReady = new Promise<void>(resolve => { reservationCreated = resolve; });
+  const pendingCreate = stalledProcess(ownerId, async lease => {
+    const slot = await lease.reserveRestaurantSlot();
+    await lease.assertHeld();
+    reservationCreated();
+    await stalledWriteGate;
+    durableBranches++;
+    await slot.release();
+  });
+  await reservationReady;
+  await new Promise(resolve => setTimeout(resolve, 110));
+  const competingCreate = await competingProcess(ownerId, async () => {
+    const usage = durableBranches + await stalledStore.countReservations(ownerId, new Date());
+    if (usage >= 1) return false;
+    durableBranches++;
+    return true;
+  });
+  assert.equal(competingCreate, false, "an in-flight create reservation must consume the last slot after its mutex expires");
+  finishStalledWrite();
+  await pendingCreate;
+  assert.equal(durableBranches, 1, "the stalled write and competing request must not exceed the restaurant limit");
+  assert.equal(await stalledStore.countReservations(ownerId, new Date()), 0, "a persisted branch releases its reservation");
 
   const branchIds = ["507f1f77bcf86cd799439021", "507f1f77bcf86cd799439022"];
   const branches = new Map(branchIds.map(id => [id, {

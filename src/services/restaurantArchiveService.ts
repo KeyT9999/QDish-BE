@@ -164,13 +164,33 @@ export function createRestaurantArchiveService(deps: ArchiveDependencies = defau
             upgradeRequired: true
           });
         }
-        await lease.assertHeld();
-        const updated = await deps.Restaurant.findOneAndUpdate(
-          { ...filter, archivedAt: { $ne: null } },
-          { $unset: { archivedAt: "", archivedByOwnerId: "" } },
-          { new: true }
-        );
-        return updated || findOwned(filter);
+        const reservation = await lease.reserveRestaurantSlot();
+        let writeStarted = false;
+        try {
+          await lease.assertHeld();
+          writeStarted = true;
+          const updated = await deps.Restaurant.findOneAndUpdate(
+            { ...filter, archivedAt: { $ne: null } },
+            { $unset: { archivedAt: "", archivedByOwnerId: "" } },
+            { new: true }
+          );
+          if (updated) {
+            try { await reservation.release(); } catch { /* The active restaurant is counted if cleanup is temporarily unavailable. */ }
+            return updated;
+          }
+          const current = await findOwned(filter);
+          if (!current.archivedAt) {
+            try { await reservation.release(); } catch { /* The active restaurant is counted if cleanup is temporarily unavailable. */ }
+            return current;
+          }
+          try { await reservation.release(); } catch { /* No branch was restored; reservation expires if cleanup is unavailable. */ }
+          return current;
+        } catch (error) {
+          if (!writeStarted) {
+            try { await reservation.release(); } catch { /* Reservation expires if cleanup is temporarily unavailable. */ }
+          }
+          throw error;
+        }
       });
     }
   };

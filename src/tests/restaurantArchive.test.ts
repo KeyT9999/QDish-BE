@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import express from "express";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { TableSessionStatus } from "../models/TableSession.js";
 import { BillStatus } from "../models/Bill.js";
@@ -13,9 +14,15 @@ import { getOwnerUsage } from "../services/subscriptionService.js";
 import { createRestaurantArchiveService } from "../services/restaurantArchiveService.js";
 import { ownerRestaurantListFilter } from "../routes/ownerRestaurantRoutes.js";
 import ownerRestaurantRouter from "../routes/ownerRestaurantRoutes.js";
+import authRouter from "../routes/authRoutes.js";
+import restaurantRouter from "../routes/restaurantRoutes.js";
+import orderRouter from "../routes/orderRoutes.js";
+import tableSessionRouter from "../routes/tableSessionRoutes.js";
+import { requireAuth } from "../middleware/auth.js";
 import { Subscription } from "../models/Subscription.js";
 import { Plan } from "../models/Plan.js";
 import { OwnerRestaurantQuotaLease } from "../models/OwnerRestaurantQuotaLease.js";
+import { OwnerRestaurantQuotaLeaseError } from "../services/ownerRestaurantQuotaLeaseService.js";
 
 const ownerId = "507f1f77bcf86cd799439011";
 const otherOwnerId = "507f1f77bcf86cd799439012";
@@ -90,7 +97,10 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
       assert.equal(type, "RESTAURANT_LIMIT");
       return options.quota ? { message: "Plan full", currentPlan: "FREE", limitValue: 1, currentUsage: 1 } : null;
     },
-    withQuotaLease: async (_ownerId: string, work: any) => work({ assertHeld: async () => {} })
+    withQuotaLease: async (_ownerId: string, work: any) => work({
+      assertHeld: async () => {},
+      reserveRestaurantSlot: async () => ({ release: async () => {} })
+    })
   } as any);
   return { branch, linked, linkedBefore, filters, updates, service, get writes() { return writes; } };
 }
@@ -213,6 +223,8 @@ async function run() {
       leaseUpdate: OwnerRestaurantQuotaLease.findOneAndUpdate,
       leaseExists: OwnerRestaurantQuotaLease.exists,
       leaseDelete: OwnerRestaurantQuotaLease.deleteOne,
+      leaseUpdateOne: OwnerRestaurantQuotaLease.updateOne,
+      leaseCount: OwnerRestaurantQuotaLease.countDocuments,
       orderFind: (await import("../models/Order.js")).Order.find
     };
     const { Bill } = await import("../models/Bill.js");
@@ -222,11 +234,18 @@ async function run() {
       archiveTransitionId: undefined as string | undefined,
       toObject() { return { _id: this._id, ownerId: this.ownerId, status: this.status, active: this.active, archivedAt: this.archivedAt }; } };
     const listFilters: any[] = [];
-    let quotaLease: { token: string; expiresAt: Date } | null = null;
+    let quotaLease: { token?: string; expiresAt?: Date; reservationToken?: string; reservationExpiresAt?: Date } | null = null;
+    let archiveLeaseFails = false;
     let createdWhileLeased = false;
     try {
       (Restaurant.findOne as any) = async (filter: any) => filter._id?.toString() === restaurantId && filter.ownerId?.toString() === ownerId ? branch : null;
-      (Restaurant.findById as any) = async (id: any) => id?.toString() === restaurantId ? branch : null;
+      (Restaurant.findById as any) = (id: any) => {
+        const document = id?.toString() === restaurantId ? branch : null;
+        return {
+          select: async () => document,
+          then: (resolve: any, reject: any) => Promise.resolve(document).then(resolve, reject)
+        };
+      };
       (Restaurant.findOneAndUpdate as any) = async (filter: any, update: any) => {
         if (filter._id.toString() !== restaurantId || filter.ownerId.toString() !== ownerId) return null;
         if (filter.archivedAt === null && branch.archivedAt) return null;
@@ -252,7 +271,7 @@ async function run() {
       (User.findById as any) = async () => ({ fullName: "Owner" });
       (User.create as any) = async () => ({ _id: new mongoose.Types.ObjectId(), username: "branch-new", role: "RESTAURANT_ADMIN" });
       (Restaurant.create as any) = async (data: any) => {
-        createdWhileLeased = !!quotaLease;
+        createdWhileLeased = !!quotaLease?.token;
         return { _id: new mongoose.Types.ObjectId(), ...data };
       };
       (TableSession.countDocuments as any) = async () => 0;
@@ -260,22 +279,43 @@ async function run() {
       (Subscription.findOne as any) = async () => ({ planId: new mongoose.Types.ObjectId(), planCode: "FREE" });
       (Plan.findById as any) = async () => ({ code: "FREE", restaurantLimit: 3 });
       (OwnerRestaurantQuotaLease.findOneAndUpdate as any) = async (filter: any, update: any) => {
+        if (archiveLeaseFails) throw new OwnerRestaurantQuotaLeaseError("Restaurant quota is busy; please retry");
         const now = new Date();
         if (filter.token && quotaLease?.token !== filter.token) return null;
-        if (filter.expiresAt?.$gt && (!quotaLease || quotaLease.expiresAt <= now)) return null;
-        if (filter.expiresAt?.$lte && quotaLease && quotaLease.expiresAt > now) return null;
-        quotaLease = { token: update.$set.token || quotaLease?.token || "", expiresAt: update.$set.expiresAt };
+        if (filter.reservationToken && quotaLease?.reservationToken !== filter.reservationToken) return null;
+        if (filter.expiresAt?.$gt && (!quotaLease?.expiresAt || quotaLease.expiresAt <= now)) return null;
+        if (filter.reservationExpiresAt?.$gt && (!quotaLease?.reservationExpiresAt || quotaLease.reservationExpiresAt <= now)) return null;
+        if (update.$set?.token && quotaLease?.expiresAt && quotaLease.expiresAt > now) return null;
+        if (update.$set?.reservationToken && quotaLease?.reservationExpiresAt && quotaLease.reservationExpiresAt > now) return null;
+        quotaLease ||= {};
+        Object.assign(quotaLease, update.$set);
         return quotaLease;
       };
       (OwnerRestaurantQuotaLease.exists as any) = async (filter: any) =>
-        !!quotaLease && quotaLease.token === filter.token && quotaLease.expiresAt > new Date();
+        !!quotaLease && (filter.token
+          ? quotaLease.token === filter.token && !!quotaLease.expiresAt && quotaLease.expiresAt > new Date()
+          : quotaLease.reservationToken === filter.reservationToken && !!quotaLease.reservationExpiresAt && quotaLease.reservationExpiresAt > new Date());
       (OwnerRestaurantQuotaLease.deleteOne as any) = async (filter: any) => {
         if (quotaLease?.token === filter.token) quotaLease = null;
       };
+      (OwnerRestaurantQuotaLease.updateOne as any) = async (filter: any, update: any) => {
+        if (!quotaLease) return { modifiedCount: 0 };
+        if (filter.token && quotaLease.token !== filter.token) return { modifiedCount: 0 };
+        if (filter.reservationToken && quotaLease.reservationToken !== filter.reservationToken) return { modifiedCount: 0 };
+        for (const key of Object.keys(update.$unset || {})) delete (quotaLease as any)[key];
+        return { modifiedCount: 1 };
+      };
+      (OwnerRestaurantQuotaLease.countDocuments as any) = async (filter: any) =>
+        !!quotaLease?.reservationExpiresAt && quotaLease.reservationExpiresAt > filter.reservationExpiresAt.$gt ? 1 : 0;
       (Order.find as any) = async () => [];
       const app = express();
       app.use(express.json());
+      app.get("/api/auth-check", requireAuth, (_req, res) => res.json({ ok: true }));
       app.use("/api/owner/restaurants", ownerRestaurantRouter);
+      app.use("/api/auth", authRouter);
+      app.use("/api/restaurants", restaurantRouter);
+      app.use("/api/orders", orderRouter);
+      app.use("/api/table-sessions", tableSessionRouter);
       const server = app.listen(0, "127.0.0.1");
       await new Promise<void>(resolve => server.once("listening", resolve));
       try {
@@ -328,9 +368,50 @@ async function run() {
         assert.deepEqual(Object.keys(archivedBody), ["restaurantId", "archivedAt"]);
         assert.equal((await (await request("GET", "/")).json() as any[]).length, 0);
         assert.equal((await (await request("GET", "/?archived=true")).json() as any[]).length, 1);
+        branch.status = RestaurantStatus.ACTIVE;
+        branch.active = true;
+        const origin = `http://127.0.0.1:${address.port}`;
+        const ownerToken = jwt.sign({ sub: ownerId, role: "RESTAURANT_OWNER" }, process.env.JWT_SECRET || "change-me");
+        const selectedBranchHeaders = { authorization: `Bearer ${ownerToken}`, "x-restaurant-id": restaurantId };
+        const selectedArchiveList = await fetch(`${base}/?archived=true`, { headers: selectedBranchHeaders });
+        assert.equal(selectedArchiveList.status, 200, "owners must still be able to open the archive list with an archived branch selected");
+        const blockedOwnerBranchRequest = await fetch(`${origin}/api/auth-check`, { headers: selectedBranchHeaders });
+        assert.equal(blockedOwnerBranchRequest.status, 403);
+        assert.equal((await blockedOwnerBranchRequest.json() as any).code, "RESTAURANT_ARCHIVED");
+        for (const role of ["RESTAURANT_ADMIN", "STAFF"]) {
+          const token = jwt.sign({ sub: otherOwnerId, role, restaurantId }, process.env.JWT_SECRET || "change-me");
+          const blockedStaffRequest = await fetch(`${origin}/api/auth-check`, { headers: { authorization: `Bearer ${token}` } });
+          assert.equal(blockedStaffRequest.status, 403, `archived ${role} JWTs must be rejected`);
+          assert.equal((await blockedStaffRequest.json() as any).code, "RESTAURANT_ARCHIVED");
+        }
+        const archivedPublicRestaurant = await fetch(`${origin}/api/restaurants/public/${restaurantId}`);
+        assert.equal(archivedPublicRestaurant.status, 404, "archived branches must not resolve publicly");
+        const archivedSession = await fetch(`${origin}/api/table-sessions/resolve`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ restaurantId, tableNumber: "1" })
+        });
+        assert.equal(archivedSession.status, 404, "archived branches must not open customer sessions");
+        const archivedOrder = await fetch(`${origin}/api/orders`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ restaurantId, tableNumber: "1", items: [{ menuItemId: "dish", name: "Dish", price: 100, quantity: 1 }] })
+        });
+        assert.equal(archivedOrder.status, 404, "archived branches must reject new orders");
+        const adminPasswordHash = await bcrypt.hash("secret1", 4);
+        (User.findOne as any) = async (filter: any) => filter.username === "branch-admin" ? {
+          _id: new mongoose.Types.ObjectId(), username: "branch-admin", passwordHash: adminPasswordHash,
+          role: "RESTAURANT_ADMIN", restaurantId: new mongoose.Types.ObjectId(restaurantId), isActive: true
+        } : null;
+        const archivedLogin = await fetch(`${origin}/api/auth/login`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username: "branch-admin", password: "secret1" })
+        });
+        assert.equal(archivedLogin.status, 403, "archived branch admins must not receive new JWTs");
+        assert.equal((await archivedLogin.json() as any).code, "RESTAURANT_ARCHIVED");
         assert.equal((await request("POST", `/${restaurantId}/restore`, otherOwnerId)).status, 404);
         const restored = await request("POST", `/${restaurantId}/restore`);
         assert.equal(restored.status, 200);
+        branch.status = RestaurantStatus.INACTIVE;
+        branch.active = false;
         assert.equal((await restored.json() as any).archivedAt, undefined);
         assert.equal(branch.status, RestaurantStatus.INACTIVE);
         assert.equal(branch.active, false);
@@ -348,6 +429,10 @@ async function run() {
         });
         assert.equal(created.status, 201, JSON.stringify(await created.json()));
         assert.equal(createdWhileLeased, true, "branch creation must hold the shared owner quota lease at insert");
+        archiveLeaseFails = true;
+        const busyArchive = await request("DELETE", `/${restaurantId}`);
+        assert.equal(busyArchive.status, 503);
+        assert.equal((await busyArchive.json() as any).code, "RESTAURANT_QUOTA_BUSY");
         assert.ok(listFilters.every(filter => filter.ownerId.toString() === ownerId));
       } finally {
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
@@ -372,6 +457,8 @@ async function run() {
       OwnerRestaurantQuotaLease.findOneAndUpdate = saved.leaseUpdate;
       OwnerRestaurantQuotaLease.exists = saved.leaseExists;
       OwnerRestaurantQuotaLease.deleteOne = saved.leaseDelete;
+      OwnerRestaurantQuotaLease.updateOne = saved.leaseUpdateOne;
+      OwnerRestaurantQuotaLease.countDocuments = saved.leaseCount;
       Order.find = saved.orderFind;
     }
   }
@@ -382,7 +469,8 @@ async function run() {
       tableCount: Table.countDocuments,
       menuCount: MenuItem.countDocuments,
       staffCount: User.countDocuments,
-      scanCount: TableSession.countDocuments
+      scanCount: TableSession.countDocuments,
+      quotaReservations: OwnerRestaurantQuotaLease.countDocuments
     };
     try {
       (Restaurant.countDocuments as any) = async (filter: any) => {
@@ -402,8 +490,9 @@ async function run() {
       (MenuItem.countDocuments as any) = countResources;
       (User.countDocuments as any) = countResources;
       (TableSession.countDocuments as any) = countResources;
+      (OwnerRestaurantQuotaLease.countDocuments as any) = async () => 1;
       const usage = await getOwnerUsage(ownerId);
-      assert.deepEqual(usage, { restaurantCount: 1, tableCount: 2, menuItemCount: 2, staffCount: 2, scanCount: 2 });
+      assert.deepEqual(usage, { restaurantCount: 2, tableCount: 2, menuItemCount: 2, staffCount: 2, scanCount: 2 });
     } finally {
       Restaurant.countDocuments = saved.restaurantCount;
       Restaurant.find = saved.restaurantFind;
@@ -411,6 +500,7 @@ async function run() {
       MenuItem.countDocuments = saved.menuCount;
       User.countDocuments = saved.staffCount;
       TableSession.countDocuments = saved.scanCount;
+      OwnerRestaurantQuotaLease.countDocuments = saved.quotaReservations;
     }
   }
   console.log("restaurant archive tests passed");

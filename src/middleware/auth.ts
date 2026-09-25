@@ -49,8 +49,29 @@ const authenticate = (resolveOwnerSelection: boolean) => async (
           return res.status(403).json({ message: "Bạn không có quyền truy cập nhà hàng này" });
         }
 
+        if (restaurant.archivedAt) {
+          const isArchiveListRequest = req.method === "GET" &&
+            req.baseUrl.endsWith("/owner/restaurants") && req.path === "/";
+          if (!isArchiveListRequest) {
+            return res.status(403).json({
+              message: "Chi nhánh đã lưu trữ; hãy khôi phục trước khi quản lý.",
+              code: "RESTAURANT_ARCHIVED"
+            });
+          }
+        }
+
         // Ghi đè restaurantId trong payload để dùng cho các controller/route sau
         req.auth.restaurantId = selectedRestaurantId.toString();
+      }
+    }
+
+    if ((payload.role === "RESTAURANT_ADMIN" || payload.role === "STAFF") && payload.restaurantId) {
+      const restaurant = await Restaurant.findById(payload.restaurantId).select("archivedAt");
+      if (restaurant?.archivedAt) {
+        return res.status(403).json({
+          message: "Chi nhánh đã lưu trữ; tài khoản không thể tiếp tục truy cập.",
+          code: "RESTAURANT_ARCHIVED"
+        });
       }
     }
 

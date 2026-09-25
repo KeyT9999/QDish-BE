@@ -9,6 +9,7 @@ export class OwnerRestaurantQuotaLeaseError extends Error {
 
 export interface OwnerRestaurantQuotaLeaseHandle {
   assertHeld(): Promise<void>;
+  reserveRestaurantSlot(): Promise<{ release(): Promise<void> }>;
 }
 
 type LeaseStore = {
@@ -16,13 +17,21 @@ type LeaseStore = {
   renew(ownerId: string, token: string, expiresAt: Date, now: Date): Promise<boolean>;
   isHeld(ownerId: string, token: string, now: Date): Promise<boolean>;
   release(ownerId: string, token: string): Promise<void>;
+  reserve(ownerId: string, leaseToken: string, reservationToken: string, expiresAt: Date, now: Date): Promise<boolean>;
+  renewReservation(ownerId: string, reservationToken: string, expiresAt: Date, now: Date): Promise<boolean>;
+  isReservationHeld(ownerId: string, reservationToken: string, now: Date): Promise<boolean>;
+  releaseReservation(ownerId: string, reservationToken: string): Promise<void>;
+  countReservations(ownerId: string, now: Date): Promise<number>;
 };
 
 const mongoLeaseStore: LeaseStore = {
   async tryAcquire(ownerId, token, expiresAt, now) {
     try {
       const acquired = await OwnerRestaurantQuotaLease.findOneAndUpdate(
-        { _id: new mongoose.Types.ObjectId(ownerId), expiresAt: { $lte: now } },
+        {
+          _id: new mongoose.Types.ObjectId(ownerId),
+          $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $lte: now } }]
+        },
         { $set: { token, expiresAt } },
         { upsert: true, new: true }
       );
@@ -47,16 +56,67 @@ const mongoLeaseStore: LeaseStore = {
     }));
   },
   async release(ownerId, token) {
-    await OwnerRestaurantQuotaLease.deleteOne({ _id: new mongoose.Types.ObjectId(ownerId), token });
+    await OwnerRestaurantQuotaLease.updateOne(
+      { _id: new mongoose.Types.ObjectId(ownerId), token },
+      { $unset: { token: "", expiresAt: "" } }
+    );
+  },
+  async reserve(ownerId, leaseToken, reservationToken, expiresAt, now) {
+    const reservation = await OwnerRestaurantQuotaLease.findOneAndUpdate(
+      {
+        _id: new mongoose.Types.ObjectId(ownerId),
+        token: leaseToken,
+        expiresAt: { $gt: now },
+        $or: [
+          { reservationExpiresAt: { $exists: false } },
+          { reservationExpiresAt: { $lte: now } }
+        ]
+      },
+      { $set: { reservationToken, reservationExpiresAt: expiresAt } },
+      { new: true }
+    );
+    return reservation?.reservationToken === reservationToken;
+  },
+  async renewReservation(ownerId, reservationToken, expiresAt, now) {
+    const renewed = await OwnerRestaurantQuotaLease.findOneAndUpdate(
+      {
+        _id: new mongoose.Types.ObjectId(ownerId),
+        reservationToken,
+        reservationExpiresAt: { $gt: now }
+      },
+      { $set: { reservationExpiresAt: expiresAt } },
+      { new: true }
+    );
+    return !!renewed;
+  },
+  async isReservationHeld(ownerId, reservationToken, now) {
+    return !!(await OwnerRestaurantQuotaLease.exists({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      reservationToken,
+      reservationExpiresAt: { $gt: now }
+    }));
+  },
+  async releaseReservation(ownerId, reservationToken) {
+    await OwnerRestaurantQuotaLease.updateOne(
+      { _id: new mongoose.Types.ObjectId(ownerId), reservationToken },
+      { $unset: { reservationToken: "", reservationExpiresAt: "" } }
+    );
+  },
+  async countReservations(ownerId, now) {
+    return OwnerRestaurantQuotaLease.countDocuments({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      reservationExpiresAt: { $gt: now }
+    });
   }
 };
 
 export function createOwnerRestaurantQuotaLeaseService(
   store: LeaseStore = mongoLeaseStore,
-  options: { leaseMs?: number; renewMs?: number; retryMs?: number; waitMs?: number } = {}
+  options: { leaseMs?: number; renewMs?: number; reservationMs?: number; retryMs?: number; waitMs?: number } = {}
 ) {
   const leaseMs = options.leaseMs ?? 30_000;
   const renewMs = options.renewMs ?? 5_000;
+  const reservationMs = options.reservationMs ?? 5 * 60_000;
   const retryMs = options.retryMs ?? 50;
   const waitMs = options.waitMs ?? 5_000;
 
@@ -70,26 +130,68 @@ export function createOwnerRestaurantQuotaLeaseService(
     }
 
     let lost = false;
+    let reservationToken: string | undefined;
+    let reservationLost = false;
     let renewal: Promise<void> | undefined;
     const renew = () => {
       if (renewal) return;
-      renewal = store.renew(ownerId, token, new Date(Date.now() + leaseMs), new Date())
-        .then(held => { if (!held) lost = true; })
-        .catch(() => { lost = true; })
+      renewal = (async () => {
+        const now = new Date();
+        const held = await store.renew(ownerId, token, new Date(Date.now() + leaseMs), now);
+        if (!held) lost = true;
+        if (reservationToken) {
+          const reservationHeld = await store.renewReservation(
+            ownerId,
+            reservationToken,
+            new Date(Date.now() + reservationMs),
+            now
+          );
+          if (!reservationHeld) reservationLost = true;
+        }
+      })()
+        .catch(() => { lost = true; if (reservationToken) reservationLost = true; })
         .finally(() => { renewal = undefined; });
     };
     const timer = setInterval(renew, renewMs);
     timer.unref();
     const lease: OwnerRestaurantQuotaLeaseHandle = {
       async assertHeld() {
-        if (lost || !(await store.isHeld(ownerId, token, new Date()))) {
+        const now = new Date();
+        const held = !lost && await store.isHeld(ownerId, token, now);
+        const reservationHeld = !reservationToken || (!reservationLost &&
+          await store.isReservationHeld(ownerId, reservationToken, now));
+        if (!held || !reservationHeld) {
           throw new OwnerRestaurantQuotaLeaseError("Restaurant quota lease was lost; please retry");
         }
+      },
+      async reserveRestaurantSlot() {
+        await this.assertHeld();
+        if (reservationToken) {
+          throw new OwnerRestaurantQuotaLeaseError("A restaurant quota slot is already reserved");
+        }
+        const nextReservationToken = randomUUID();
+        const reserved = await store.reserve(
+          ownerId,
+          token,
+          nextReservationToken,
+          new Date(Date.now() + reservationMs),
+          new Date()
+        );
+        if (!reserved) {
+          throw new OwnerRestaurantQuotaLeaseError("A restaurant quota slot is already in progress; please retry");
+        }
+        reservationToken = nextReservationToken;
+        reservationLost = false;
+        return {
+          async release() {
+            await store.releaseReservation(ownerId, nextReservationToken);
+            if (reservationToken === nextReservationToken) reservationToken = undefined;
+          }
+        };
       }
     };
     try {
       const result = await work(lease);
-      await lease.assertHeld();
       return result;
     } finally {
       clearInterval(timer);

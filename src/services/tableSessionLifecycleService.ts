@@ -3,6 +3,7 @@ import mongoose, { Types } from "mongoose";
 import { Order, OrderStatus, PaymentMethod } from "../models/Order.js";
 import { Table, TableStatus } from "../models/Table.js";
 import { SessionCreatedBy, TableSession, TableSessionStatus, generateSessionCode } from "../models/TableSession.js";
+import { Restaurant } from "../models/Restaurant.js";
 
 export const ACTIVE_TABLE_SESSION_STATUSES = [
   TableSessionStatus.OPEN,
@@ -19,12 +20,14 @@ export class TableSessionLifecycleError extends Error {
 }
 
 type TableSessionLifecycleDeps = {
+  Restaurant?: any;
   Table: any;
   TableSession: any;
   Order: any;
 };
 
 const defaultDeps: TableSessionLifecycleDeps = {
+  Restaurant,
   Table,
   TableSession,
   Order
@@ -155,6 +158,13 @@ export const resolveTableSession = async (
   const restaurantObjectId = toObjectId(input.restaurantId, "restaurantId");
   const tableNumber = input.tableNumber.trim();
 
+  if (deps.Restaurant?.findById) {
+    const restaurant = await deps.Restaurant.findById(restaurantObjectId);
+    if (restaurant?.archivedAt) {
+      throw new TableSessionLifecycleError(404, "Nha hang khong con nhan don");
+    }
+  }
+
   const table = await deps.Table.findOne({
     restaurantId: restaurantObjectId,
     code: tableNumber,
@@ -197,6 +207,12 @@ export const resolveTableSession = async (
   const sessionCode = generateSessionCode(tableNumber);
 
   try {
+    if (deps.Restaurant?.findById) {
+      const restaurant = await deps.Restaurant.findById(restaurantObjectId);
+      if (restaurant?.archivedAt) {
+        throw new TableSessionLifecycleError(404, "Nha hang khong con nhan don");
+      }
+    }
     const session = await deps.TableSession.create({
       restaurantId: restaurantObjectId,
       tableId: table._id,
