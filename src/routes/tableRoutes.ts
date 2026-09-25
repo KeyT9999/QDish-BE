@@ -76,4 +76,46 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// Xoá bàn ăn
+router.delete("/:id", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const authRestaurantId = req.auth?.restaurantId;
+
+    if (!authRestaurantId) {
+      return res
+        .status(400)
+        .json({ message: "Không xác định được nhà hàng từ token" });
+    }
+
+    let table = null;
+    if (mongoose.isValidObjectId(id)) {
+      table = await Table.findById(id);
+    }
+    if (!table) {
+      table = await Table.findOne({ restaurantId: authRestaurantId, code: id });
+    }
+
+    if (!table) {
+      return res.status(404).json({ message: "Không tìm thấy bàn ăn" });
+    }
+
+    if (String(table.restaurantId) !== String(authRestaurantId)) {
+      return res.status(403).json({ message: "Không có quyền xoá bàn của nhà hàng khác" });
+    }
+
+    if (table.status === "OCCUPIED" || table.status === "PAYMENT_PENDING") {
+      return res.status(400).json({
+        message: "Không thể xoá bàn đang có khách ngồi hoặc chờ thanh toán"
+      });
+    }
+
+    await Table.findByIdAndDelete(table._id);
+
+    return res.json({ message: "Xoá bàn thành công", id: table._id, code: table.code });
+  } catch (error) {
+    return res.status(500).json({ message: "Lỗi hệ thống khi xoá bàn", error });
+  }
+});
+
 export default router;

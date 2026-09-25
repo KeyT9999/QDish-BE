@@ -27,6 +27,7 @@
     "start": "node dist/index.js",
     "seed:super-admin": "tsx src/scripts/createSuperAdmin.ts",
     "seed:plans": "tsx src/scripts/seedPlans.ts",
+    "payos:register-webhook": "tsx src/scripts/registerPayosWebhook.ts",
     "migrate:customer-crm-plans": "tsx src/scripts/enableCustomerCrmPlans.ts",
     "fix:notification-encoding": "tsx src/scripts/fixNotificationEncoding.ts"
   },

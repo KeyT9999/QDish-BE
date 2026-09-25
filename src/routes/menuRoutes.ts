@@ -98,7 +98,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       await assertIngredientsAccessible(ingredients, restaurantId);
     } catch (error) {
       if (error instanceof IngredientAccessDeniedError) {
-        return res.status(404).json({ message: "KhÃ´ng tÃ¬m tháº¥y nguyÃªn liá»‡u" });
+        return res.status(404).json({ message: "Không tìm thấy nguyên liệu" });
       }
       throw error;
     }
@@ -220,7 +220,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       await assertIngredientsAccessible(ingredients, restaurantId);
     } catch (error) {
       if (error instanceof IngredientAccessDeniedError) {
-        return res.status(404).json({ message: "KhÃ´ng tÃ¬m tháº¥y nguyÃªn liá»‡u" });
+        return res.status(404).json({ message: "Không tìm thấy nguyên liệu" });
       }
       throw error;
     }

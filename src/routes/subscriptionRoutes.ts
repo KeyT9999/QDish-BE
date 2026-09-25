@@ -278,10 +278,18 @@ export function createCheckoutHandler(customDeps?: Partial<SubscriptionCheckoutD
         });
       }
 
-      // 3. Với gói có phí (> 0đ): Tạo PayOS Payment Link hoặc Sandbox Fallback
+      // 3. Gói trả phí luôn phải được thanh toán qua PayOS thật.
+      if (!deps.isPayOSConfigured) {
+        return res.status(503).json({
+          message: "PayOS chưa được cấu hình đầy đủ. Vui lòng kiểm tra cấu hình thanh toán phía máy chủ.",
+          code: "PAYOS_NOT_CONFIGURED"
+        });
+      }
+
       const orderCode = await deps.createUniqueOrderCode();
       const appBaseUrl = deps.appBaseUrl;
-      const cleanDesc = `QDish SaaS ${plan.code}`.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 30);
+      // Keep the description within PayOS bank-transfer limits (some banks allow 9 chars).
+      const cleanDesc = `QD${plan.code}`.replace(/[^a-zA-Z0-9]/g, "").substring(0, 9);
 
       const paymentData = {
         orderCode,
@@ -306,41 +314,32 @@ export function createCheckoutHandler(customDeps?: Partial<SubscriptionCheckoutD
         amount
       });
 
-      let payosResponse: any = null;
-      let isSandbox = false;
-      let gatewayNotice: string | undefined;
-
-      if (deps.isPayOSConfigured) {
-        try {
-          payosResponse = await deps.payOSCreatePayment(paymentData);
-          if (!payosResponse || !payosResponse.checkoutUrl) {
-            throw new Error("Không nhận được liên kết thanh toán từ cổng PayOS");
-          }
-        } catch (payosError: any) {
-          console.warn(`[SubscriptionCheckout] PayOS gateway rejected (code: ${payosError?.code || "N/A"}, message: ${payosError?.message}). Switching to Sandbox Checkout.`);
-          isSandbox = true;
-          gatewayNotice = payosError?.message || "Cổng PayOS tạm thời không khả dụng, đã chuyển sang cổng thử nghiệm Sandbox.";
+      let payosResponse: any;
+      try {
+        payosResponse = await deps.payOSCreatePayment(paymentData);
+        if (!payosResponse?.checkoutUrl || !payosResponse?.paymentLinkId) {
+          throw new Error("PayOS returned an incomplete payment link");
         }
-      } else {
-        isSandbox = true;
-        gatewayNotice = "PayOS chưa cấu hình đầy đủ, kích hoạt cổng thanh toán Sandbox.";
+      } catch (payosError: any) {
+        const payosDescription = payosError?.desc
+          ?? payosError?.error?.desc
+          ?? payosError?.error?.data?.desc;
+        console.warn("[SubscriptionCheckout] PayOS payment-link creation failed", {
+          code: payosError?.code || "N/A",
+          status: payosError?.status || payosError?.statusCode || "N/A",
+          desc: typeof payosDescription === "string" ? payosDescription.slice(0, 200) : "N/A"
+        });
+        return res.status(502).json({
+          message: "Không thể tạo thanh toán PayOS. Vui lòng thử lại sau hoặc liên hệ quản trị viên.",
+          code: "PAYOS_CHECKOUT_FAILED"
+        });
       }
 
-      const checkoutUrl = isSandbox
-        ? `${appBaseUrl}/payment-checkout?orderCode=${orderCode}`
-        : payosResponse.checkoutUrl;
-
-      const qrCode = isSandbox
-        ? `https://img.vietqr.io/image/970422-0905123456-compact2.png?amount=${amount}&addInfo=QDISH%20${orderCode}&accountName=QDISH%20SAAS`
-        : payosResponse.qrCode;
-
-      const paymentLinkId = isSandbox
-        ? `sandbox_${orderCode}`
-        : payosResponse.paymentLinkId;
-
-      const paymentStatus = isSandbox
-        ? PaymentStatus.PENDING
-        : (payosResponse.status || PaymentStatus.PENDING);
+      const checkoutUrl = payosResponse.checkoutUrl;
+      const qrCode = payosResponse.qrCode;
+      const paymentLinkId = payosResponse.paymentLinkId;
+      const paymentStatus = payosResponse.status || PaymentStatus.PENDING;
+      const isSandbox = false;
 
       // 4. Tạo/Cập nhật Subscription dạng PENDING_PAYMENT
       const subscription = await deps.Subscription.create({
@@ -365,7 +364,7 @@ export function createCheckoutHandler(customDeps?: Partial<SubscriptionCheckoutD
         paymentLinkId,
         checkoutUrl,
         qrCode,
-        payosRawResponse: isSandbox ? { mode: "SANDBOX_FALLBACK", notice: gatewayNotice } : payosResponse
+        payosRawResponse: payosResponse
       });
 
       res.json({
@@ -376,7 +375,6 @@ export function createCheckoutHandler(customDeps?: Partial<SubscriptionCheckoutD
         amount,
         status: paymentStatus,
         isSandbox,
-        gatewayNotice,
         planName: plan.name,
         planCode: plan.code
       });
@@ -469,6 +467,15 @@ export function createSandboxConfirmHandler(customDeps?: any) {
         return res.status(404).json({ message: "Không tìm thấy giao dịch thanh toán này" });
       }
 
+      const isSandbox = transaction.paymentLinkId?.startsWith("sandbox_") ||
+        Boolean(transaction.payosRawResponse?.mode?.includes("SANDBOX"));
+      if (!isSandbox) {
+        return res.status(403).json({
+          message: "Không thể xác nhận thủ công một giao dịch PayOS thật.",
+          code: "REAL_PAYMENT_CANNOT_BE_CONFIRMED_MANUALLY"
+        });
+      }
+
       if (transaction.status === PaymentStatus.PAID) {
         return res.json({
           success: true,
@@ -501,6 +508,8 @@ export function createSandboxConfirmHandler(customDeps?: any) {
 export function createCancelCheckoutHandler(customDeps?: any) {
   const deps = {
     PaymentTransaction,
+    payOSCancelPayment: (orderCode: number, reason: string) => payOS.paymentRequests.cancel(orderCode, reason),
+    isPayOSConfigured,
     cancelPendingPayment,
     ...customDeps
   };
@@ -526,6 +535,36 @@ export function createCancelCheckoutHandler(customDeps?: any) {
 
       if (transaction.status === PaymentStatus.PAID) {
         return res.status(400).json({ message: "Giao dịch đã thanh toán thành công, không thể hủy" });
+      }
+
+      const isSandbox = transaction.paymentLinkId?.startsWith("sandbox_") ||
+        Boolean(transaction.payosRawResponse?.mode?.includes("SANDBOX"));
+      if (!isSandbox) {
+        if (!deps.isPayOSConfigured) {
+          return res.status(503).json({
+            message: "PayOS chưa được cấu hình nên chưa thể xác nhận hủy giao dịch.",
+            code: "PAYOS_NOT_CONFIGURED"
+          });
+        }
+
+        try {
+          const payosCancellation = await deps.payOSCancelPayment(oCode, "Owner cancelled subscription checkout");
+          if (payosCancellation?.status !== "CANCELLED") {
+            return res.status(409).json({
+              message: "PayOS chưa xác nhận giao dịch đã hủy. Hãy kiểm tra trạng thái thanh toán trước khi thử lại.",
+              code: "PAYOS_CANCELLATION_NOT_CONFIRMED"
+            });
+          }
+        } catch (payosError: any) {
+          console.warn("[SubscriptionCancel] PayOS payment-link cancellation failed", {
+            code: payosError?.code || "N/A",
+            status: payosError?.status || payosError?.statusCode || "N/A"
+          });
+          return res.status(502).json({
+            message: "PayOS chưa xác nhận hủy giao dịch. Vui lòng kiểm tra lại trạng thái trước khi thử thanh toán mới.",
+            code: "PAYOS_CANCELLATION_FAILED"
+          });
+        }
       }
 
       await deps.cancelPendingPayment(transaction, {
@@ -605,12 +644,24 @@ export function createPaymentStatusHandler(customDeps?: any) {
         const payosInfo = await deps.payOSGetPayment(oCode);
         console.log(`PayOS status for order ${oCode}:`, payosInfo?.status);
 
-        if (payosInfo?.status === "PAID") {
+        const hasMatchingOrderAndAmount = Number(payosInfo?.orderCode) === oCode
+          && Number(payosInfo?.amount) === Number(transaction.amount);
+        if (!hasMatchingOrderAndAmount) {
+          console.warn(`[PaymentStatus] PayOS returned mismatched payment details for order ${oCode}`);
+          return res.json({
+            status: "PENDING",
+            message: "Đang chờ PayOS xác nhận giao dịch."
+          });
+        }
+
+        if (payosInfo?.status === "PAID" && Number(payosInfo?.amountPaid) >= Number(transaction.amount)) {
           await deps.activatePaidSubscription(transaction, payosInfo);
           return res.json({
             status: "PAID",
             message: "Thanh toán thành công và gói đã được kích hoạt!"
           });
+        } else if (payosInfo?.status === "PAID") {
+          console.warn(`[PaymentStatus] PayOS returned mismatched payment details for order ${oCode}`);
         }
 
         if (payosInfo?.status === "CANCELLED" || payosInfo?.status === "EXPIRED") {
@@ -683,10 +734,13 @@ router.get(
 // POST /api/payments/payos-webhook - Tiếp nhận callback từ PayOS
 router.post("/payments/payos-webhook", async (req, res) => {
   try {
+    if (!isPayOSConfigured) {
+      return res.status(503).json({ message: "PayOS chưa được cấu hình trên máy chủ." });
+    }
+
     const webhookData = req.body;
     console.log("Received PayOS webhook", {
       orderCode: webhookData?.data?.orderCode,
-      success: webhookData?.success,
       code: webhookData?.data?.code || webhookData?.code
     });
 
@@ -694,14 +748,14 @@ router.post("/payments/payos-webhook", async (req, res) => {
     let verifiedData;
     try {
       verifiedData = await payOS.webhooks.verify(webhookData);
-    } catch (err) {
-      console.error("❌ Webhook verification signature failed:", err);
+    } catch {
+      console.warn("PayOS webhook rejected: signature verification failed");
       return res.status(400).json({ message: "Chữ ký webhook không hợp lệ" });
     }
 
-    const { orderCode, code } = verifiedData;
+    const { orderCode, code, amount, paymentLinkId } = verifiedData;
     const isSuccess = code === "00";
-    console.log(`Webhook verified successfully for order ${orderCode}. Code = ${code}, isSuccess = ${isSuccess}`);
+    console.log(`PayOS webhook verified for order ${orderCode}; code=${code}`);
 
     // Tìm Giao dịch trong DB
     const transaction = await PaymentTransaction.findOne({ orderCode });
@@ -710,8 +764,16 @@ router.post("/payments/payos-webhook", async (req, res) => {
       return res.status(200).json({ message: "Không tìm thấy orderCode trong hệ thống" });
     }
 
+    const detailsMatch = Number(orderCode) === Number(transaction.orderCode)
+      && Number(amount) === Number(transaction.amount)
+      && (!transaction.paymentLinkId || paymentLinkId === transaction.paymentLinkId);
+    if (!detailsMatch) {
+      console.warn(`PayOS webhook rejected: transaction details mismatch for order ${orderCode}`);
+      return res.status(400).json({ message: "Thông tin giao dịch webhook không khớp" });
+    }
+
     if (isSuccess) {
-      const paidSub = await activatePaidSubscription(transaction, webhookData);
+      const paidSub = await activatePaidSubscription(transaction, verifiedData);
       if (paidSub) {
         console.log(`Activated plan ${paidSub.planCode} for ownerId ${paidSub.ownerId}`);
         // Auto notification: payment success

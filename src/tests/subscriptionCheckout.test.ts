@@ -35,7 +35,7 @@ function makeResponse() {
 async function runTests() {
   console.log("🧪 Starting Subscription Checkout Unit Tests...");
 
-  // Test 1: PayOS error (code 215 quota exhausted) falls back to Sandbox without returning 500
+  // Test 1: PayOS errors fail closed instead of creating a fake Sandbox transaction
   {
     const mockPlan = {
       _id: plusPlanId,
@@ -87,14 +87,11 @@ async function runTests() {
       res.response as any
     );
 
-    assert.equal(res.state.statusCode, 200, "Should return HTTP 200 instead of HTTP 500 when PayOS throws code 215");
-    assert.equal(res.state.body.isSandbox, true, "Should flag isSandbox as true");
-    assert.equal(res.state.body.orderCode, 123456789, "Order code should match");
-    assert(res.state.body.checkoutUrl.includes("/payment-checkout?orderCode=123456789"), "Checkout URL should route to payment-checkout");
-    assert(createdSub !== null, "Subscription should be saved");
-    assert(createdTx !== null, "PaymentTransaction should be saved");
-    assert.equal(createdTx.status, PaymentStatus.PENDING);
-    console.log("  ✅ Test 1: PayOS quota error (code 215) activates Sandbox fallback with 200 OK");
+    assert.equal(res.state.statusCode, 502, "PayOS checkout errors should return a gateway error");
+    assert.equal(res.state.body.code, "PAYOS_CHECKOUT_FAILED");
+    assert.equal(createdSub, null, "A pending subscription must not be created without a real PayOS link");
+    assert.equal(createdTx, null, "A fake pending payment must not be persisted when PayOS rejects checkout");
+    console.log("  ✅ Test 1: PayOS quota error (code 215) fails closed without creating a Sandbox transaction");
   }
 
   // Test 2: Sandbox payment confirmation activates the subscription
@@ -106,7 +103,8 @@ async function runTests() {
       ownerId: new mongoose.Types.ObjectId(ownerId),
       planId: plusPlanId,
       status: PaymentStatus.PENDING,
-      amount: 199000
+      amount: 199000,
+      paymentLinkId: "sandbox_123456789"
     };
 
     const confirmHandler = createSandboxConfirmHandler({
@@ -146,7 +144,8 @@ async function runTests() {
       _id: new mongoose.Types.ObjectId(),
       orderCode: 987654321,
       ownerId: new mongoose.Types.ObjectId(ownerId),
-      status: PaymentStatus.PENDING
+      status: PaymentStatus.PENDING,
+      paymentLinkId: "sandbox_987654321"
     };
 
     const cancelHandler = createCancelCheckoutHandler({
