@@ -166,21 +166,14 @@ router.post("/", async (req, res) => {
   // Allow placing multiple orders for the same table (customer ordering multiple rounds)
 
   let bill: any;
-  try {
-    bill = await resolveActiveBillForSession(session);
-  } catch (error) {
-    if (error instanceof BillLifecycleError) {
-      return res.status(error.statusCode).json({ message: error.message });
-    }
-    console.error("Loi khi resolve bill de tao order:", error);
-    return res.status(500).json({ message: "Khong the khoi tao bill cho order", error });
-  }
-
   const totalAmount = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   let order: IOrder;
   try {
     order = await withActiveRestaurantOrderWrite(restaurant._id, restaurant.ownerId, async () => {
+      // Bill creation must share the archive lease with the order write. Otherwise
+      // a stale session request can create an unpaid bill after archive finalizes.
+      bill = await resolveActiveBillForSession(session);
       const createdOrder = await Order.create({
         restaurantId: new mongoose.Types.ObjectId(restaurantId),
         tableNumber,

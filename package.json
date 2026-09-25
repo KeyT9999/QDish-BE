@@ -23,7 +23,7 @@
     "test:recommendation-routes": "tsx src/tests/recommendationRoutes.test.ts",
     "test:deployment-metadata": "tsx src/tests/deploymentMetadata.test.ts",
     "test:subscription-checkout": "tsx src/tests/subscriptionCheckout.test.ts",
-    "test:restaurant-archive": "tsx src/tests/restaurantArchive.test.ts && tsx src/tests/restaurantQuotaLease.test.ts",
+    "test:restaurant-archive": "tsx src/tests/restaurantArchive.test.ts && tsx src/tests/restaurantQuotaLease.test.ts && tsx src/tests/restaurantSocketAccess.test.ts",
     "test:restaurant-order-write": "tsx src/tests/restaurantOrderWrite.test.ts",
     "test:kurumi-seed": "tsx src/tests/kurumiMenuSeedData.test.ts",
     "test:kurumi-recipes": "tsx src/tests/kurumiRecipeSeedData.test.ts",

@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 
 import { createSocketCorsOptions } from "../config/cors.js";
 import type { AuthPayload } from "../middleware/auth.js";
+import { withRestaurantSocketAccess } from "../services/restaurantSocketAccessService.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
 
@@ -11,6 +12,21 @@ let io: Server | null = null;
 
 export const getRestaurantRoom = (restaurantId: string) => `restaurant:${restaurantId}`;
 export const getUserRoom = (userId: string) => `user:${userId}`;
+
+export const disconnectRestaurantStaffSockets = async (restaurantId: string) => {
+  if (!io) return;
+
+  const sockets = await io.in(getRestaurantRoom(restaurantId)).fetchSockets();
+  for (const socket of sockets) {
+    const auth = socket.data.auth as AuthPayload | undefined;
+    if (
+      auth?.restaurantId?.toString() === restaurantId &&
+      (auth.role === "RESTAURANT_ADMIN" || auth.role === "STAFF")
+    ) {
+      socket.disconnect(true);
+    }
+  }
+};
 
 const getTokenFromSocket = (socket: Socket) => {
   const authToken = socket.handshake.auth?.token;
@@ -32,7 +48,7 @@ export const initRealtime = (server: HttpServer) => {
     transports: ["websocket", "polling"]
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = getTokenFromSocket(socket);
     if (!token) {
       return next(new Error("Thiếu token realtime"));
@@ -55,26 +71,28 @@ export const initRealtime = (server: HttpServer) => {
     const auth = socket.data.auth as AuthPayload | undefined;
     if (!auth?.sub) return;
 
-    // Always join user-level room for notifications
-    const userRoom = getUserRoom(auth.sub);
-    socket.join(userRoom);
+    void withRestaurantSocketAccess(auth, async () => {
+      // Join the branch room while holding the same owner lease as archive.
+      // An archive that runs next will find and disconnect this socket.
+      const userRoom = getUserRoom(auth.sub);
+      await socket.join(userRoom);
 
-    // Join restaurant room if applicable (RESTAURANT_ADMIN, STAFF)
-    const restaurantId = auth.restaurantId;
-    if (restaurantId) {
-      const room = getRestaurantRoom(restaurantId);
-      socket.join(room);
-      socket.emit("realtime:ready", { restaurantId });
-    } else {
-      socket.emit("realtime:ready", { userId: auth.sub });
-    }
-
-    socket.on("restaurant:join", () => {
+      const restaurantId = auth.restaurantId;
       if (restaurantId) {
         const room = getRestaurantRoom(restaurantId);
-        socket.join(room);
+        await socket.join(room);
         socket.emit("realtime:ready", { restaurantId });
+      } else {
+        socket.emit("realtime:ready", { userId: auth.sub });
       }
+      socket.on("restaurant:join", () => {
+        if (!restaurantId) return;
+        const room = getRestaurantRoom(restaurantId);
+        void socket.join(room);
+        socket.emit("realtime:ready", { restaurantId });
+      });
+    }).catch(() => {
+      socket.disconnect(true);
     });
   });
 

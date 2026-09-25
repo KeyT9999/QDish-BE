@@ -5,6 +5,7 @@ import { TableSession, TableSessionStatus } from "../models/TableSession.js";
 import { Bill, BillStatus } from "../models/Bill.js";
 import { checkPlanLimit } from "./subscriptionService.js";
 import { withOwnerRestaurantQuotaLease } from "./ownerRestaurantQuotaLeaseService.js";
+import { disconnectRestaurantStaffSockets } from "../realtime/socket.js";
 
 export class RestaurantArchiveError extends Error {
   constructor(
@@ -26,6 +27,7 @@ type ArchiveDependencies = {
   Bill: Pick<typeof Bill, "countDocuments">;
   checkPlanLimit: typeof checkPlanLimit;
   withQuotaLease: typeof withOwnerRestaurantQuotaLease;
+  disconnectStaffSockets: (restaurantId: string) => Promise<void>;
 };
 
 const defaultDependencies: ArchiveDependencies = {
@@ -33,7 +35,8 @@ const defaultDependencies: ArchiveDependencies = {
   TableSession,
   Bill,
   checkPlanLimit,
-  withQuotaLease: withOwnerRestaurantQuotaLease
+  withQuotaLease: withOwnerRestaurantQuotaLease,
+  disconnectStaffSockets: disconnectRestaurantStaffSockets
 };
 
 export function createRestaurantArchiveService(deps: ArchiveDependencies = defaultDependencies) {
@@ -104,6 +107,7 @@ export function createRestaurantArchiveService(deps: ArchiveDependencies = defau
       }
 
       const exactMarker = { ...filter, archivedAt: marker, archiveTransitionId: transitionId };
+      let finalized: any;
       try {
         const [activeSessions, unpaidBills] = await Promise.all([
           deps.TableSession.countDocuments({
@@ -121,13 +125,12 @@ export function createRestaurantArchiveService(deps: ArchiveDependencies = defau
           });
         }
         await lease.assertHeld();
-        const finalized = await deps.Restaurant.findOneAndUpdate(
+        finalized = await deps.Restaurant.findOneAndUpdate(
           exactMarker,
           { $unset: { archiveTransitionId: "", archiveTransitionExpiresAt: "" } },
           { new: true }
         );
         if (!finalized?.archivedAt) throw new RestaurantArchiveError(409, "Không thể hoàn tất lưu trữ chi nhánh");
-        return { restaurantId, archivedAt: finalized.archivedAt };
       } catch (error) {
         await deps.Restaurant.findOneAndUpdate(
           exactMarker,
@@ -136,6 +139,13 @@ export function createRestaurantArchiveService(deps: ArchiveDependencies = defau
         );
         throw error;
       }
+      try {
+        await deps.disconnectStaffSockets(restaurantId);
+      } catch (error) {
+        // Realtime cleanup is best effort; the archived state remains authoritative.
+        console.error("Không thể ngắt socket nhân viên của chi nhánh đã lưu trữ", error);
+      }
+      return { restaurantId, archivedAt: finalized.archivedAt };
       };
       return archiveWithinLease();
       });

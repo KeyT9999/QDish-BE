@@ -52,6 +52,7 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
   const filters: any[] = [];
   const updates: any[] = [];
   let writes = 0;
+  let staffSocketsDisconnected = 0;
   const matches = (filter: any) => {
     if (filter._id?.toString() !== restaurantId || filter.ownerId?.toString() !== ownerId) return false;
     if (filter.archivedAt === null && branch.archivedAt) return false;
@@ -100,9 +101,13 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
     withQuotaLease: async (_ownerId: string, work: any) => work({
       assertHeld: async () => {},
       reserveRestaurantSlot: async () => ({ release: async () => {} })
-    })
+    }),
+    disconnectStaffSockets: async (id: string) => {
+      assert.equal(id, restaurantId);
+      staffSocketsDisconnected++;
+    }
   } as any);
-  return { branch, linked, linkedBefore, filters, updates, service, get writes() { return writes; } };
+  return { branch, linked, linkedBefore, filters, updates, service, get writes() { return writes; }, get staffSocketsDisconnected() { return staffSocketsDisconnected; } };
 }
 
 async function run() {
@@ -153,6 +158,7 @@ async function run() {
     const f = fixture({ requireBarrier: true });
     await f.service.archive(ownerId, restaurantId);
     assert.ok(f.branch.archivedAt);
+    assert.equal(f.staffSocketsDisconnected, 1, "staff/admin realtime connections are revoked after archive finalizes");
   }
   {
     const f = fixture();
