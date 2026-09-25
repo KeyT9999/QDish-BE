@@ -23,6 +23,10 @@ export interface IRestaurant extends Document {
   bankAccount?: string; // Số tài khoản ngân hàng
   bankName?: string; // Tên ngân hàng
   ownerId?: Types.ObjectId; // ID chủ nhà hàng
+  archivedAt?: Date;
+  archivedByOwnerId?: Types.ObjectId;
+  archiveTransitionId?: string;
+  archiveTransitionExpiresAt?: Date;
 }
 
 const RestaurantSchema = new Schema<IRestaurant>(
@@ -104,6 +108,19 @@ const RestaurantSchema = new Schema<IRestaurant>(
       type: Schema.Types.ObjectId,
       ref: "User",
       index: true
+    },
+    archivedAt: {
+      type: Date
+    },
+    archivedByOwnerId: {
+      type: Schema.Types.ObjectId,
+      ref: "User"
+    },
+    archiveTransitionId: {
+      type: String
+    },
+    archiveTransitionExpiresAt: {
+      type: Date
     }
   },
   { timestamps: true }

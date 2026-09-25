@@ -91,6 +91,61 @@ async function testResolveRepairsClosedActiveSession() {
   assert.notEqual(result.session._id.toString(), ids.closedSession.toString());
 }
 
+async function testResolveRejectsArchivedRestaurantBeforeCreatingSession() {
+  let tableReads = 0;
+  let sessionCreates = 0;
+  await assert.rejects(resolveTableSession({
+    restaurantId: ids.restaurant.toString(),
+    tableNumber: "15"
+  }, {
+    Restaurant: { findById: async () => ({ archivedAt: new Date() }) },
+    Table: {
+      findOne: async () => { tableReads++; return { _id: ids.table, code: "15", isActive: true }; },
+      findByIdAndUpdate: async (_id: any, update: any) => ({ _id: ids.table, ...update })
+    },
+    TableSession: {
+      findOne: async () => null,
+      create: async () => { sessionCreates++; return {}; }
+    },
+    Order: { find: async () => [] }
+  } as any), (error: any) => error.statusCode === 404);
+  assert.equal(tableReads, 0, "archived restaurants are rejected before table/session work");
+  assert.equal(sessionCreates, 0, "archived restaurants cannot open customer sessions");
+}
+
+async function testResolveRechecksArchiveStateInsideOwnerLeaseBeforeCreatingSession() {
+  const ownerId = asObjectId("7");
+  let archived = false;
+  let leaseOwner = "";
+  let sessionCreates = 0;
+  const restaurant = { ownerId, get archivedAt() { return archived ? new Date() : null; } };
+
+  await assert.rejects(resolveTableSession({
+    restaurantId: ids.restaurant.toString(),
+    tableNumber: "15"
+  }, {
+    Restaurant: { findById: async () => restaurant },
+    Table: {
+      findOne: async () => ({ _id: ids.table, code: "15", isActive: true }),
+      findByIdAndUpdate: async (_id: any, update: any) => ({ _id: ids.table, ...update })
+    },
+    TableSession: {
+      findOne: async () => null,
+      create: async () => { sessionCreates++; return {}; }
+    },
+    Order: { find: async () => [] },
+    withQuotaLease: async (id: string, work: (lease: { assertHeld(): Promise<void> }) => Promise<unknown>) => {
+      leaseOwner = id;
+      // Simulate archive winning the shared owner lock after the initial read.
+      archived = true;
+      return work({ assertHeld: async () => {} });
+    }
+  } as any), (error: any) => error.statusCode === 404);
+
+  assert.equal(leaseOwner, ownerId.toString(), "session creation must serialize with this owner's archive operation");
+  assert.equal(sessionCreates, 0, "a session must not be created when archive wins the lock");
+}
+
 async function testCloseSessionMarksPaidAndReleasesTable() {
   const table: any = makeDoc({
     _id: ids.table,
@@ -262,6 +317,8 @@ async function testCustomerHistoryIsScopedToActiveSession() {
 
 async function run() {
   await testResolveRepairsClosedActiveSession();
+  await testResolveRejectsArchivedRestaurantBeforeCreatingSession();
+  await testResolveRechecksArchiveStateInsideOwnerLeaseBeforeCreatingSession();
   await testCloseSessionMarksPaidAndReleasesTable();
   await testCustomerHistoryIsScopedToActiveSession();
   console.log("tableSessionLifecycle regression tests passed");

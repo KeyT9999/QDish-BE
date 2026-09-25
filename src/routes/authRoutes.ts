@@ -54,6 +54,16 @@ router.post("/login", async (req, res) => {
     return res.status(403).json({ message: "Tài khoản đã bị khóa hoặc tạm ngưng" });
   }
 
+  if ((user.role === UserRole.RESTAURANT_ADMIN || user.role === UserRole.STAFF) && user.restaurantId) {
+    const restaurant = await Restaurant.findById(user.restaurantId).select("archivedAt");
+    if (restaurant?.archivedAt) {
+      return res.status(403).json({
+        message: "Chi nhánh đã lưu trữ; tài khoản không thể đăng nhập.",
+        code: "RESTAURANT_ARCHIVED"
+      });
+    }
+  }
+
   const payload = {
     sub: user._id.toString(),
     username: user.username,

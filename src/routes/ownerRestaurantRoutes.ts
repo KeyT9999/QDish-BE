@@ -4,10 +4,12 @@ import mongoose from "mongoose";
 import multer from "multer";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { User, UserRole } from "../models/User.js";
-import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
+import { AuthRequest, requireAuth, requireOwnerArchiveAuth, requireRole } from "../middleware/auth.js";
 import { Order, OrderStatus } from "../models/Order.js";
 import { Category } from "../models/Category.js";
 import { MenuItem } from "../models/MenuItem.js";
+import { RestaurantArchiveError, restaurantArchiveService } from "../services/restaurantArchiveService.js";
+import { OwnerRestaurantQuotaLeaseError, withOwnerRestaurantQuotaLease } from "../services/ownerRestaurantQuotaLeaseService.js";
 import {
   deleteCloudinaryImage,
   isCloudinaryConfigured,
@@ -67,25 +69,17 @@ const findOwnedRestaurant = async (ownerId: string | undefined, restaurantId: st
   });
 };
 
+export const ownerRestaurantListFilter = (ownerId: string, archived: unknown) => ({
+  ownerId: new mongoose.Types.ObjectId(ownerId),
+  archivedAt: archived === "true" ? { $ne: null } : null
+});
+
 // 1. Tạo nhà hàng mới + tài khoản Admin nhà hàng
 router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
   try {
     const ownerId = req.auth?.sub;
     if (!ownerId) {
       return res.status(403).json({ message: "Không xác định được thông tin chủ sở hữu" });
-    }
-
-    // Kiểm tra giới hạn số lượng nhà hàng theo gói
-    const { checkPlanLimit } = await import("../services/subscriptionService.js");
-    const limitError = await checkPlanLimit(ownerId, "RESTAURANT_LIMIT");
-    if (limitError) {
-      return res.status(403).json({
-        message: limitError.message,
-        code: "PLAN_LIMIT_REACHED",
-        limitType: "RESTAURANT_LIMIT",
-        currentPlan: limitError.currentPlan,
-        upgradeRequired: true
-      });
     }
 
     const {
@@ -136,18 +130,48 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
     const ownerUser = await User.findById(ownerId);
     const ownerName = ownerUser?.fullName || ownerUser?.username || "Chủ nhà hàng";
 
-    // Create Restaurant
-    const restaurant = await Restaurant.create({
-      name: restaurantName.trim(),
-      username: restaurantUsername.trim().toLowerCase(),
-      ownerName,
-      email: restaurantEmail.trim().toLowerCase(),
-      address: address.trim(),
-      phone: restaurantPhone.trim(),
-      status: RestaurantStatus.ACTIVE,
-      active: true,
-      ownerId: new mongoose.Types.ObjectId(ownerId)
+    // Quota check and branch creation share the owner lease with restore.
+    const { checkPlanLimit } = await import("../services/subscriptionService.js");
+    const creation = await withOwnerRestaurantQuotaLease(ownerId, async lease => {
+      const limitError = await checkPlanLimit(ownerId, "RESTAURANT_LIMIT");
+      if (limitError) return { limitError, restaurant: null };
+      const reservation = await lease.reserveRestaurantSlot();
+      let writeStarted = false;
+      try {
+        await lease.assertHeld();
+        writeStarted = true;
+        const restaurant = await Restaurant.create({
+          name: restaurantName.trim(),
+          username: restaurantUsername.trim().toLowerCase(),
+          ownerName,
+          email: restaurantEmail.trim().toLowerCase(),
+          address: address.trim(),
+          phone: restaurantPhone.trim(),
+          status: RestaurantStatus.ACTIVE,
+          active: true,
+          ownerId: new mongoose.Types.ObjectId(ownerId)
+        });
+        try { await reservation.release(); } catch { /* Reservation expires if cleanup is temporarily unavailable. */ }
+        return { limitError: null, restaurant };
+      } catch (error) {
+        if (!writeStarted) {
+          try { await reservation.release(); } catch { /* Reservation expires if cleanup is temporarily unavailable. */ }
+        }
+        throw error;
+      }
     });
+    if (creation.limitError) {
+      return res.status(403).json({
+        message: creation.limitError.message,
+        code: "PLAN_LIMIT_REACHED",
+        limitType: "RESTAURANT_LIMIT",
+        currentPlan: creation.limitError.currentPlan,
+        limitValue: creation.limitError.limitValue,
+        currentUsage: creation.limitError.currentUsage,
+        upgradeRequired: true
+      });
+    }
+    const restaurant = creation.restaurant!;
 
     // Hash password for Restaurant Admin
     const passwordHash = await bcrypt.hash(restaurantPassword, 10);
@@ -171,6 +195,9 @@ router.post("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), 
       }
     });
   } catch (error: any) {
+    if (error instanceof OwnerRestaurantQuotaLeaseError) {
+      return res.status(503).json({ message: error.message, code: "RESTAURANT_QUOTA_BUSY" });
+    }
     console.error("Lỗi khi chủ nhà hàng tạo nhà hàng:", error);
     res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi tạo nhà hàng", error });
   }
@@ -184,9 +211,8 @@ router.get("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), a
       return res.status(403).json({ message: "Không xác định được chủ sở hữu" });
     }
 
-    const restaurants = await Restaurant.find({
-      ownerId: new mongoose.Types.ObjectId(ownerId)
-    }).sort({ createdAt: -1 });
+    const restaurants = await Restaurant.find(ownerRestaurantListFilter(ownerId, req.query.archived))
+      .sort({ createdAt: -1 });
 
     const { getPlanLimits } = await import("../services/subscriptionService.js");
     let planFeatures = {
@@ -274,6 +300,36 @@ router.get("/", requireAuth, requireRole(UserRole.RESTAURANT_OWNER as string), a
   } catch (error) {
     console.error("Lỗi khi lấy danh sách nhà hàng của chủ sở hữu:", error);
     res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi tải danh sách chi nhánh", error });
+  }
+});
+
+router.delete("/:restaurantId", requireOwnerArchiveAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
+  try {
+    return res.json(await restaurantArchiveService.archive(req.auth?.sub || "", req.params.restaurantId));
+  } catch (error) {
+    if (error instanceof RestaurantArchiveError) {
+      return res.status(error.statusCode).json(error.toResponse());
+    }
+    if (error instanceof OwnerRestaurantQuotaLeaseError) {
+      return res.status(503).json({ message: error.message, code: "RESTAURANT_QUOTA_BUSY" });
+    }
+    console.error("Lỗi khi lưu trữ chi nhánh:", error);
+    return res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi lưu trữ chi nhánh" });
+  }
+});
+
+router.post("/:restaurantId/restore", requireOwnerArchiveAuth, requireRole(UserRole.RESTAURANT_OWNER as string), async (req: AuthRequest, res) => {
+  try {
+    return res.json(await restaurantArchiveService.restore(req.auth?.sub || "", req.params.restaurantId));
+  } catch (error) {
+    if (error instanceof RestaurantArchiveError) {
+      return res.status(error.statusCode).json(error.toResponse());
+    }
+    if (error instanceof OwnerRestaurantQuotaLeaseError) {
+      return res.status(503).json({ message: error.message, code: "RESTAURANT_QUOTA_BUSY" });
+    }
+    console.error("Lỗi khi khôi phục chi nhánh:", error);
+    return res.status(500).json({ message: "Đã xảy ra lỗi hệ thống khi khôi phục chi nhánh" });
   }
 });
 

@@ -3,6 +3,8 @@ import mongoose, { Types } from "mongoose";
 import { Order, OrderStatus, PaymentMethod } from "../models/Order.js";
 import { Table, TableStatus } from "../models/Table.js";
 import { SessionCreatedBy, TableSession, TableSessionStatus, generateSessionCode } from "../models/TableSession.js";
+import { Restaurant } from "../models/Restaurant.js";
+import { withOwnerRestaurantQuotaLease } from "./ownerRestaurantQuotaLeaseService.js";
 
 export const ACTIVE_TABLE_SESSION_STATUSES = [
   TableSessionStatus.OPEN,
@@ -19,15 +21,19 @@ export class TableSessionLifecycleError extends Error {
 }
 
 type TableSessionLifecycleDeps = {
+  Restaurant?: any;
   Table: any;
   TableSession: any;
   Order: any;
+  withQuotaLease?: typeof withOwnerRestaurantQuotaLease;
 };
 
 const defaultDeps: TableSessionLifecycleDeps = {
+  Restaurant,
   Table,
   TableSession,
-  Order
+  Order,
+  withQuotaLease: withOwnerRestaurantQuotaLease
 };
 
 const toObjectId = (value: string | Types.ObjectId, fieldName: string) => {
@@ -154,6 +160,15 @@ export const resolveTableSession = async (
 ) => {
   const restaurantObjectId = toObjectId(input.restaurantId, "restaurantId");
   const tableNumber = input.tableNumber.trim();
+  let ownerId: unknown;
+
+  if (deps.Restaurant?.findById) {
+    const restaurant = await deps.Restaurant.findById(restaurantObjectId);
+    if (!restaurant || restaurant.archivedAt) {
+      throw new TableSessionLifecycleError(404, "Nha hang khong con nhan don");
+    }
+    ownerId = restaurant.ownerId;
+  }
 
   const table = await deps.Table.findOne({
     restaurantId: restaurantObjectId,
@@ -197,19 +212,32 @@ export const resolveTableSession = async (
   const sessionCode = generateSessionCode(tableNumber);
 
   try {
-    const session = await deps.TableSession.create({
-      restaurantId: restaurantObjectId,
-      tableId: table._id,
-      tableNumber,
-      sessionCode,
-      status: TableSessionStatus.OPEN,
-      openedAt: new Date(),
-      totalAmount: 0,
-      orderCount: 0,
-      createdBy: input.createdBy || SessionCreatedBy.CUSTOMER_SCAN
-    });
-    const updatedTable = await updateTableForActiveSession(deps, table._id, session);
-    return { session, table: updatedTable || table, created: true };
+    const createSession = async (assertLeaseHeld?: () => Promise<void>) => {
+      await assertLeaseHeld?.();
+      if (deps.Restaurant?.findById) {
+        const restaurant = await deps.Restaurant.findById(restaurantObjectId);
+        if (!restaurant || restaurant.archivedAt) {
+          throw new TableSessionLifecycleError(404, "Nha hang khong con nhan don");
+        }
+      }
+      const session = await deps.TableSession.create({
+        restaurantId: restaurantObjectId,
+        tableId: table._id,
+        tableNumber,
+        sessionCode,
+        status: TableSessionStatus.OPEN,
+        openedAt: new Date(),
+        totalAmount: 0,
+        orderCount: 0,
+        createdBy: input.createdBy || SessionCreatedBy.CUSTOMER_SCAN
+      });
+      const updatedTable = await updateTableForActiveSession(deps, table._id, session);
+      return { session, table: updatedTable || table, created: true };
+    };
+    if (ownerId && deps.withQuotaLease) {
+      return await deps.withQuotaLease(ownerId.toString(), lease => createSession(() => lease.assertHeld()));
+    }
+    return await createSession();
   } catch (error: any) {
     if (error?.code === 11000) {
       const session = await findActiveSessionByTable(deps, restaurantObjectId, tableNumber);

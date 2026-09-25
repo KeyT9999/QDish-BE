@@ -45,7 +45,7 @@ router.post("/resolve", async (req, res) => {
     }
 
     const restaurant = await Restaurant.findById(restaurantId);
-    if (!restaurant || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
+    if (!restaurant || restaurant.archivedAt || restaurant.status !== RestaurantStatus.ACTIVE || restaurant.active === false) {
       return res.status(404).json({ message: "Khong tim thay nha hang dang hoat dong" });
     }
 

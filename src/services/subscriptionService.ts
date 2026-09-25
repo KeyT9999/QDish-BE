@@ -6,6 +6,7 @@ import { Table } from "../models/Table.js";
 import { MenuItem } from "../models/MenuItem.js";
 import { User, UserRole } from "../models/User.js";
 import { TableSession, SessionCreatedBy } from "../models/TableSession.js";
+import { OwnerRestaurantQuotaLease } from "../models/OwnerRestaurantQuotaLease.js";
 
 // ──────────────────────────────────────────
 // Plan Hierarchy
@@ -159,7 +160,17 @@ export async function getOwnerUsage(ownerId: string | mongoose.Types.ObjectId): 
   const oid = typeof ownerId === "string" ? new mongoose.Types.ObjectId(ownerId) : ownerId;
 
   // 1. Số nhà hàng
-  const restaurantCount = await Restaurant.countDocuments({ ownerId: oid });
+  const [activeRestaurantCount, pendingRestaurantReservations] = await Promise.all([
+    Restaurant.countDocuments({
+      ownerId: oid,
+      $or: [{ archivedAt: null }, { archiveTransitionId: { $exists: true } }]
+    }),
+    OwnerRestaurantQuotaLease.countDocuments({
+      _id: oid,
+      reservationExpiresAt: { $gt: new Date() }
+    })
+  ]);
+  const restaurantCount = activeRestaurantCount + pendingRestaurantReservations;
 
   // Lấy danh sách ID của tất cả nhà hàng của owner này
   const restaurants = await Restaurant.find({ ownerId: oid }).select("_id");
