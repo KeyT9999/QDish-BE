@@ -15,6 +15,7 @@ import { ownerRestaurantListFilter } from "../routes/ownerRestaurantRoutes.js";
 import ownerRestaurantRouter from "../routes/ownerRestaurantRoutes.js";
 import { Subscription } from "../models/Subscription.js";
 import { Plan } from "../models/Plan.js";
+import { OwnerRestaurantQuotaLease } from "../models/OwnerRestaurantQuotaLease.js";
 
 const ownerId = "507f1f77bcf86cd799439011";
 const otherOwnerId = "507f1f77bcf86cd799439012";
@@ -28,9 +29,11 @@ type Branch = {
   active: boolean;
   archivedAt?: Date;
   archivedByOwnerId?: mongoose.Types.ObjectId;
+  archiveTransitionId?: string;
+  archiveTransitionExpiresAt?: Date;
 };
 
-function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boolean; countFails?: boolean } = {}) {
+function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boolean; countFails?: boolean; requireBarrier?: boolean } = {}) {
   const branch: Branch = {
     _id: new mongoose.Types.ObjectId(restaurantId),
     ownerId: new mongoose.Types.ObjectId(ownerId),
@@ -46,6 +49,8 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
     if (filter._id?.toString() !== restaurantId || filter.ownerId?.toString() !== ownerId) return false;
     if (filter.archivedAt === null && branch.archivedAt) return false;
     if (filter.archivedAt?.$ne === null && !branch.archivedAt) return false;
+    if (filter.archivedAt instanceof Date && filter.archivedAt.getTime() !== branch.archivedAt?.getTime()) return false;
+    if (filter.archiveTransitionId && filter.archiveTransitionId !== branch.archiveTransitionId) return false;
     return true;
   };
   const service = createRestaurantArchiveService({
@@ -66,6 +71,7 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
     },
     TableSession: {
       countDocuments: async (filter: any) => {
+        if (options.requireBarrier) assert.ok(branch.archivedAt, "archive marker must precede activity count");
         if (options.countFails) throw new Error("count failed");
         assert.equal(filter.restaurantId?.toString(), restaurantId);
         assert.deepEqual(filter.status.$in, [TableSessionStatus.OPEN, TableSessionStatus.PAYMENT_REQUESTED]);
@@ -74,6 +80,7 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
     },
     Bill: {
       countDocuments: async (filter: any) => {
+        if (options.requireBarrier) assert.ok(branch.archivedAt, "archive marker must precede bill count");
         assert.equal(filter.restaurantId?.toString(), restaurantId);
         assert.deepEqual(filter.status.$in, [BillStatus.UNPAID, BillStatus.PAYMENT_REQUESTED]);
         return (options.bills || []).filter(status => filter.status.$in.includes(status)).length;
@@ -82,7 +89,8 @@ function fixture(options: { sessions?: string[]; bills?: string[]; quota?: boole
     checkPlanLimit: async (_ownerId: string, type: string) => {
       assert.equal(type, "RESTAURANT_LIMIT");
       return options.quota ? { message: "Plan full", currentPlan: "FREE", limitValue: 1, currentUsage: 1 } : null;
-    }
+    },
+    withQuotaLease: async (_ownerId: string, work: any) => work({ assertHeld: async () => {} })
   } as any);
   return { branch, linked, linkedBefore, filters, updates, service, get writes() { return writes; } };
 }
@@ -93,14 +101,16 @@ async function run() {
     await assert.rejects(f.service.archive(otherOwnerId, restaurantId), (error: any) => error.statusCode === 404);
     await assert.rejects(f.service.restore(otherOwnerId, restaurantId), (error: any) => error.statusCode === 404);
     assert.equal(f.writes, 0);
+    assert.equal(f.branch.archivedAt, undefined);
   }
   {
     const f = fixture();
     await assert.rejects(f.service.archive(ownerId, archivedId), (error: any) => error.statusCode === 404);
     assert.equal(f.writes, 0);
+    assert.equal(f.branch.archivedAt, undefined);
   }
   for (const status of [TableSessionStatus.OPEN, TableSessionStatus.PAYMENT_REQUESTED]) {
-    const f = fixture({ sessions: [status, TableSessionStatus.CLOSED] });
+    const f = fixture({ sessions: [status, TableSessionStatus.CLOSED], requireBarrier: true });
     await assert.rejects(f.service.archive(ownerId, restaurantId), (error: any) => {
       assert.equal(error.statusCode, 409);
       assert.equal(error.code, "RESTAURANT_HAS_OPEN_ACTIVITY");
@@ -108,10 +118,12 @@ async function run() {
       assert.equal(error.unpaidBills, 0);
       return true;
     });
-    assert.equal(f.writes, 0);
+    assert.equal(f.writes, 2);
+    assert.equal(f.branch.archivedAt, undefined);
+    assert.ok(f.filters.some(filter => filter.archivedAt instanceof Date && typeof filter.archiveTransitionId === "string"));
   }
   for (const status of [BillStatus.UNPAID, BillStatus.PAYMENT_REQUESTED]) {
-    const f = fixture({ bills: [status, BillStatus.PAID] });
+    const f = fixture({ bills: [status, BillStatus.PAID], requireBarrier: true });
     await assert.rejects(f.service.archive(ownerId, restaurantId), (error: any) => {
       assert.equal(error.statusCode, 409);
       assert.equal(error.code, "RESTAURANT_HAS_OPEN_ACTIVITY");
@@ -119,13 +131,18 @@ async function run() {
       assert.equal(error.unpaidBills, 1);
       return true;
     });
-    assert.equal(f.writes, 0);
+    assert.equal(f.writes, 2);
+    assert.equal(f.branch.archivedAt, undefined);
   }
   {
-    const f = fixture({ countFails: true });
+    const f = fixture({ countFails: true, requireBarrier: true });
     await assert.rejects(f.service.archive(ownerId, restaurantId), /count failed/);
     assert.equal(f.branch.archivedAt, undefined);
-    assert.equal(f.writes, 0);
+  }
+  {
+    const f = fixture({ requireBarrier: true });
+    await f.service.archive(ownerId, restaurantId);
+    assert.ok(f.branch.archivedAt);
   }
   {
     const f = fixture();
@@ -138,17 +155,18 @@ async function run() {
     assert.deepEqual(f.linked, f.linkedBefore);
     const again = await f.service.archive(ownerId, restaurantId);
     assert.equal(again.archivedAt.getTime(), archived.archivedAt.getTime());
-    assert.equal(f.writes, 1);
+    assert.equal(f.writes, 2);
     const restored = await f.service.restore(ownerId, restaurantId);
     assert.equal(restored.status, RestaurantStatus.INACTIVE);
     assert.equal(restored.active, false);
     assert.equal(restored.archivedAt, undefined);
     assert.equal(restored.archivedByOwnerId, undefined);
     assert.deepEqual(f.linked, f.linkedBefore);
-    assert.equal(f.writes, 2);
+    assert.equal(f.writes, 3);
     assert.deepEqual(Object.keys(f.updates[0]), ["$set"]);
-    assert.deepEqual(Object.keys(f.updates[0].$set).sort(), ["archivedAt", "archivedByOwnerId"]);
-    assert.deepEqual(Object.keys(f.updates[1].$unset).sort(), ["archivedAt", "archivedByOwnerId"]);
+    assert.deepEqual(Object.keys(f.updates[0].$set).sort(), ["archiveTransitionExpiresAt", "archiveTransitionId", "archivedAt", "archivedByOwnerId"]);
+    assert.deepEqual(Object.keys(f.updates[1].$unset).sort(), ["archiveTransitionExpiresAt", "archiveTransitionId"]);
+    assert.deepEqual(Object.keys(f.updates[2].$unset).sort(), ["archivedAt", "archivedByOwnerId"]);
     assert.ok(f.filters.some(filter => filter.archivedAt === null));
     assert.ok(f.filters.some(filter => filter.archivedAt?.$ne === null));
   }
@@ -165,7 +183,7 @@ async function run() {
       return true;
     });
     assert.ok(f.branch.archivedAt);
-    assert.equal(f.writes, 1);
+    assert.equal(f.writes, 2);
   }
   {
     const active = ownerRestaurantListFilter(ownerId, undefined);
@@ -177,32 +195,46 @@ async function run() {
   {
     const saved = {
       findOne: Restaurant.findOne,
+      findById: Restaurant.findById,
       find: Restaurant.find,
       restaurantCount: Restaurant.countDocuments,
       update: Restaurant.findOneAndUpdate,
+      restaurantCreate: Restaurant.create,
       tableCount: Table.countDocuments,
       menuCount: MenuItem.countDocuments,
       staffCount: User.countDocuments,
+      userFindOne: User.findOne,
+      userFindById: User.findById,
+      userCreate: User.create,
       sessionCount: TableSession.countDocuments,
       billCount: (await import("../models/Bill.js")).Bill.countDocuments,
       subscriptionFind: Subscription.findOne,
       planFind: Plan.findById,
+      leaseUpdate: OwnerRestaurantQuotaLease.findOneAndUpdate,
+      leaseExists: OwnerRestaurantQuotaLease.exists,
+      leaseDelete: OwnerRestaurantQuotaLease.deleteOne,
       orderFind: (await import("../models/Order.js")).Order.find
     };
     const { Bill } = await import("../models/Bill.js");
     const { Order } = await import("../models/Order.js");
     const branch = { _id: new mongoose.Types.ObjectId(restaurantId), ownerId: new mongoose.Types.ObjectId(ownerId),
       status: RestaurantStatus.INACTIVE, active: false, archivedAt: undefined as Date | undefined,
+      archiveTransitionId: undefined as string | undefined,
       toObject() { return { _id: this._id, ownerId: this.ownerId, status: this.status, active: this.active, archivedAt: this.archivedAt }; } };
     const listFilters: any[] = [];
+    let quotaLease: { token: string; expiresAt: Date } | null = null;
+    let createdWhileLeased = false;
     try {
       (Restaurant.findOne as any) = async (filter: any) => filter._id?.toString() === restaurantId && filter.ownerId?.toString() === ownerId ? branch : null;
+      (Restaurant.findById as any) = async (id: any) => id?.toString() === restaurantId ? branch : null;
       (Restaurant.findOneAndUpdate as any) = async (filter: any, update: any) => {
         if (filter._id.toString() !== restaurantId || filter.ownerId.toString() !== ownerId) return null;
         if (filter.archivedAt === null && branch.archivedAt) return null;
         if (filter.archivedAt?.$ne === null && !branch.archivedAt) return null;
-        if (update.$set) branch.archivedAt = update.$set.archivedAt;
-        if (update.$unset) branch.archivedAt = undefined;
+        if (filter.archivedAt instanceof Date && filter.archivedAt.getTime() !== branch.archivedAt?.getTime()) return null;
+        if (filter.archiveTransitionId && filter.archiveTransitionId !== branch.archiveTransitionId) return null;
+        if (update.$set) Object.assign(branch, update.$set);
+        if (update.$unset) for (const key of Object.keys(update.$unset)) delete (branch as any)[key];
         return branch;
       };
       (Restaurant.find as any) = (filter: any) => {
@@ -216,10 +248,30 @@ async function run() {
       (Table.countDocuments as any) = async () => 0;
       (MenuItem.countDocuments as any) = async () => 0;
       (User.countDocuments as any) = async () => 0;
+      (User.findOne as any) = async () => null;
+      (User.findById as any) = async () => ({ fullName: "Owner" });
+      (User.create as any) = async () => ({ _id: new mongoose.Types.ObjectId(), username: "branch-new", role: "RESTAURANT_ADMIN" });
+      (Restaurant.create as any) = async (data: any) => {
+        createdWhileLeased = !!quotaLease;
+        return { _id: new mongoose.Types.ObjectId(), ...data };
+      };
       (TableSession.countDocuments as any) = async () => 0;
       (Bill.countDocuments as any) = async () => 0;
       (Subscription.findOne as any) = async () => ({ planId: new mongoose.Types.ObjectId(), planCode: "FREE" });
       (Plan.findById as any) = async () => ({ code: "FREE", restaurantLimit: 3 });
+      (OwnerRestaurantQuotaLease.findOneAndUpdate as any) = async (filter: any, update: any) => {
+        const now = new Date();
+        if (filter.token && quotaLease?.token !== filter.token) return null;
+        if (filter.expiresAt?.$gt && (!quotaLease || quotaLease.expiresAt <= now)) return null;
+        if (filter.expiresAt?.$lte && quotaLease && quotaLease.expiresAt > now) return null;
+        quotaLease = { token: update.$set.token || quotaLease?.token || "", expiresAt: update.$set.expiresAt };
+        return quotaLease;
+      };
+      (OwnerRestaurantQuotaLease.exists as any) = async (filter: any) =>
+        !!quotaLease && quotaLease.token === filter.token && quotaLease.expiresAt > new Date();
+      (OwnerRestaurantQuotaLease.deleteOne as any) = async (filter: any) => {
+        if (quotaLease?.token === filter.token) quotaLease = null;
+      };
       (Order.find as any) = async () => [];
       const app = express();
       app.use(express.json());
@@ -238,6 +290,29 @@ async function run() {
         assert.equal(deniedRole.status, 403);
         const wrongOwner = await request("DELETE", `/${restaurantId}`, otherOwnerId);
         assert.equal(wrongOwner.status, 404);
+        const wrongOwnerWithSelection = await fetch(base + `/${restaurantId}`, {
+          method: "DELETE",
+          headers: {
+            authorization: `Bearer ${jwt.sign({ sub: otherOwnerId, role: "RESTAURANT_OWNER" }, process.env.JWT_SECRET || "change-me")}`,
+            "x-restaurant-id": restaurantId
+          }
+        });
+        assert.equal(wrongOwnerWithSelection.status, 404);
+        const wrongOwnerRestoreWithSelection = await fetch(base + `/${restaurantId}/restore`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${jwt.sign({ sub: otherOwnerId, role: "RESTAURANT_OWNER" }, process.env.JWT_SECRET || "change-me")}`,
+            "x-restaurant-id": restaurantId
+          }
+        });
+        assert.equal(wrongOwnerRestoreWithSelection.status, 404);
+        const otherEndpointWithSelection = await fetch(base + `/${restaurantId}`, {
+          headers: {
+            authorization: `Bearer ${jwt.sign({ sub: otherOwnerId, role: "RESTAURANT_OWNER" }, process.env.JWT_SECRET || "change-me")}`,
+            "x-restaurant-id": restaurantId
+          }
+        });
+        assert.equal(otherEndpointWithSelection.status, 403);
         (TableSession.countDocuments as any) = async () => 1;
         const conflict = await request("DELETE", `/${restaurantId}`);
         assert.equal(conflict.status, 409);
@@ -248,8 +323,9 @@ async function run() {
         assert.equal(branch.archivedAt, undefined);
         (TableSession.countDocuments as any) = async () => 0;
         const archived = await request("DELETE", `/${restaurantId}`);
-        assert.equal(archived.status, 200);
-        assert.deepEqual(Object.keys(await archived.json()), ["restaurantId", "archivedAt"]);
+        const archivedBody = await archived.json() as any;
+        assert.equal(archived.status, 200, JSON.stringify(archivedBody));
+        assert.deepEqual(Object.keys(archivedBody), ["restaurantId", "archivedAt"]);
         assert.equal((await (await request("GET", "/")).json() as any[]).length, 0);
         assert.equal((await (await request("GET", "/?archived=true")).json() as any[]).length, 1);
         assert.equal((await request("POST", `/${restaurantId}/restore`, otherOwnerId)).status, 404);
@@ -258,22 +334,44 @@ async function run() {
         assert.equal((await restored.json() as any).archivedAt, undefined);
         assert.equal(branch.status, RestaurantStatus.INACTIVE);
         assert.equal(branch.active, false);
+        const created = await fetch(base + "/", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${jwt.sign({ sub: ownerId, role: "RESTAURANT_OWNER" }, process.env.JWT_SECRET || "change-me")}`,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            restaurantName: "New branch", restaurantEmail: "new@example.com", restaurantPhone: "123",
+            address: "A", restaurantUsername: "branch-new", restaurantPassword: "secret1",
+            confirmRestaurantPassword: "secret1"
+          })
+        });
+        assert.equal(created.status, 201, JSON.stringify(await created.json()));
+        assert.equal(createdWhileLeased, true, "branch creation must hold the shared owner quota lease at insert");
         assert.ok(listFilters.every(filter => filter.ownerId.toString() === ownerId));
       } finally {
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       }
     } finally {
       Restaurant.findOne = saved.findOne;
+      Restaurant.findById = saved.findById;
       Restaurant.find = saved.find;
       Restaurant.countDocuments = saved.restaurantCount;
       Restaurant.findOneAndUpdate = saved.update;
+      Restaurant.create = saved.restaurantCreate;
       Table.countDocuments = saved.tableCount;
       MenuItem.countDocuments = saved.menuCount;
       User.countDocuments = saved.staffCount;
+      User.findOne = saved.userFindOne;
+      User.findById = saved.userFindById;
+      User.create = saved.userCreate;
       TableSession.countDocuments = saved.sessionCount;
       Bill.countDocuments = saved.billCount;
       Subscription.findOne = saved.subscriptionFind;
       Plan.findById = saved.planFind;
+      OwnerRestaurantQuotaLease.findOneAndUpdate = saved.leaseUpdate;
+      OwnerRestaurantQuotaLease.exists = saved.leaseExists;
+      OwnerRestaurantQuotaLease.deleteOne = saved.leaseDelete;
       Order.find = saved.orderFind;
     }
   }
@@ -289,7 +387,7 @@ async function run() {
     try {
       (Restaurant.countDocuments as any) = async (filter: any) => {
         assert.equal(filter.ownerId.toString(), ownerId);
-        assert.equal(filter.archivedAt, null);
+        assert.deepEqual(filter.$or, [{ archivedAt: null }, { archiveTransitionId: { $exists: true } }]);
         return 1;
       };
       (Restaurant.find as any) = (filter: any) => ({ select: async () => {

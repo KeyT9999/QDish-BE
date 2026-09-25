@@ -25,6 +25,8 @@ export interface IRestaurant extends Document {
   ownerId?: Types.ObjectId; // ID chủ nhà hàng
   archivedAt?: Date;
   archivedByOwnerId?: Types.ObjectId;
+  archiveTransitionId?: string;
+  archiveTransitionExpiresAt?: Date;
 }
 
 const RestaurantSchema = new Schema<IRestaurant>(
@@ -113,6 +115,12 @@ const RestaurantSchema = new Schema<IRestaurant>(
     archivedByOwnerId: {
       type: Schema.Types.ObjectId,
       ref: "User"
+    },
+    archiveTransitionId: {
+      type: String
+    },
+    archiveTransitionExpiresAt: {
+      type: Date
     }
   },
   { timestamps: true }

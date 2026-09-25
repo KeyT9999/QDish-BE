@@ -15,7 +15,7 @@ export interface AuthRequest extends Request {
   auth?: AuthPayload;
 }
 
-export const requireAuth = async (
+const authenticate = (resolveOwnerSelection: boolean) => async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
@@ -32,7 +32,7 @@ export const requireAuth = async (
     req.auth = payload;
 
     // Nếu người dùng là RESTAURANT_OWNER, phân tích selectedRestaurantId động
-    if (payload.role === "RESTAURANT_OWNER") {
+    if (resolveOwnerSelection && payload.role === "RESTAURANT_OWNER") {
       const selectedRestaurantId = 
         req.headers["x-restaurant-id"] || 
         req.query.restaurantId || 
@@ -59,6 +59,11 @@ export const requireAuth = async (
     return res.status(401).json({ message: "Token không hợp lệ hoặc hết hạn" });
   }
 };
+
+export const requireAuth = authenticate(true);
+
+// Archive/restore authorize the path restaurant through an owner-scoped service lookup.
+export const requireOwnerArchiveAuth = authenticate(false);
 
 export const requireRole = (roles: string | string[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
