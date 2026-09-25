@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 
 import { createSocketCorsOptions } from "../config/cors.js";
 import type { AuthPayload } from "../middleware/auth.js";
-import { withRestaurantSocketAccess } from "../services/restaurantSocketAccessService.js";
+import { withAuthorizedRestaurantSocketAccess } from "../services/restaurantSocketAccessService.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
 
@@ -16,14 +16,21 @@ export const getUserRoom = (userId: string) => `user:${userId}`;
 export const disconnectRestaurantStaffSockets = async (restaurantId: string) => {
   if (!io) return;
 
-  const sockets = await io.in(getRestaurantRoom(restaurantId)).fetchSockets();
+  const room = getRestaurantRoom(restaurantId);
+  const sockets = await io.in(room).fetchSockets();
   for (const socket of sockets) {
     const auth = socket.data.auth as AuthPayload | undefined;
-    if (
+    const isAssignedStaff =
       auth?.restaurantId?.toString() === restaurantId &&
-      (auth.role === "RESTAURANT_ADMIN" || auth.role === "STAFF")
-    ) {
+      (auth.role === "RESTAURANT_ADMIN" || auth.role === "STAFF");
+
+    if (isAssignedStaff) {
       socket.disconnect(true);
+    } else {
+      // Owners may subscribe to a selected branch dynamically. Revoke only
+      // this branch room so their user-level notification socket stays alive.
+      await socket.leave(room);
+      socket.emit("restaurant:access-revoked", { restaurantId, reason: "archived" });
     }
   }
 };
@@ -71,27 +78,66 @@ export const initRealtime = (server: HttpServer) => {
     const auth = socket.data.auth as AuthPayload | undefined;
     if (!auth?.sub) return;
 
-    void withRestaurantSocketAccess(auth, async () => {
-      // Join the branch room while holding the same owner lease as archive.
-      // An archive that runs next will find and disconnect this socket.
-      const userRoom = getUserRoom(auth.sub);
-      await socket.join(userRoom);
+    const userRoom = getUserRoom(auth.sub);
+    let joinedRestaurantId: string | null = null;
+    let roomChangeQueue: Promise<void> = Promise.resolve();
 
-      const restaurantId = auth.restaurantId;
-      if (restaurantId) {
-        const room = getRestaurantRoom(restaurantId);
-        await socket.join(room);
-        socket.emit("realtime:ready", { restaurantId });
+    const enqueueRestaurantJoin = (requestedRestaurantId: unknown, acknowledge?: (result: {
+      ok: boolean;
+      restaurantId?: string;
+      code?: string;
+      message?: string;
+    }) => void) => {
+      const restaurantId = typeof requestedRestaurantId === "string"
+        ? requestedRestaurantId
+        : "";
+
+      roomChangeQueue = roomChangeQueue
+        .catch(() => undefined)
+        .then(async () => {
+          await withAuthorizedRestaurantSocketAccess(auth, restaurantId, async () => {
+            if (joinedRestaurantId && joinedRestaurantId !== restaurantId) {
+              await socket.leave(getRestaurantRoom(joinedRestaurantId));
+            }
+            await socket.join(getRestaurantRoom(restaurantId));
+            joinedRestaurantId = restaurantId;
+          });
+
+          socket.emit("realtime:ready", { restaurantId });
+          acknowledge?.({ ok: true, restaurantId });
+        })
+        .catch((error: any) => {
+          const code = typeof error?.code === "string" ? error.code : "SOCKET_JOIN_FAILED";
+          const message = typeof error?.message === "string"
+            ? error.message
+            : "Không thể kết nối realtime tới chi nhánh này.";
+          acknowledge?.({ ok: false, restaurantId, code, message });
+        });
+    };
+
+    // Register before awaiting room access: the client can emit join as soon
+    // as the Socket.IO connection is established.
+    socket.on("restaurant:join", (payload: unknown, acknowledge?: (result: {
+      ok: boolean;
+      restaurantId?: string;
+      code?: string;
+      message?: string;
+    }) => void) => {
+      const requestedRestaurantId = typeof payload === "string"
+        ? payload
+        : (payload as { restaurantId?: unknown } | null)?.restaurantId;
+      enqueueRestaurantJoin(requestedRestaurantId, acknowledge);
+    });
+
+    void (async () => {
+      await socket.join(userRoom);
+      const isBranchBoundRole = auth.role === "RESTAURANT_ADMIN" || auth.role === "STAFF";
+      if (isBranchBoundRole && auth.restaurantId) {
+        enqueueRestaurantJoin(auth.restaurantId);
       } else {
         socket.emit("realtime:ready", { userId: auth.sub });
       }
-      socket.on("restaurant:join", () => {
-        if (!restaurantId) return;
-        const room = getRestaurantRoom(restaurantId);
-        void socket.join(room);
-        socket.emit("realtime:ready", { restaurantId });
-      });
-    }).catch(() => {
+    })().catch(() => {
       socket.disconnect(true);
     });
   });
