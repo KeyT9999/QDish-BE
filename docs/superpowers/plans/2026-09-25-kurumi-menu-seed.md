@@ -52,23 +52,23 @@
 - `--apply`: require the explicit database name and exact configured host to match the configured URI and require exactly one username/restaurant match with `restaurant.username` matching the account.
 - Upsert menu listing fields only; preserve recipe, nutrition, allergen, and other existing item fields.
 
-- [ ] Add tests for deterministic normalized keys and for `buildMenuItemListingPatch` preserving existing `ingredients`, nutrition, and `foodAttributes` when applied to a menu document.
-- [ ] Run the focused test and verify it fails before implementing the helper behavior.
-- [ ] Implement the CLI guards and sanitized dry-run; add `seed:kurumi` and `test:kurumi-seed` package scripts, and append the focused test to `test:ci`.
-- [ ] Run focused tests and build; inspect `--help`/invalid-argument behavior without opening a database connection.
-- [ ] Run the dry-run against the confirmed target; require exactly one matching account and restaurant, 25 official categories, 181 source items, and zero planned deletes.
+- [x] Add tests for deterministic normalized keys and for `buildMenuItemListingPatch` preserving existing `ingredients`, nutrition, and `foodAttributes` when applied to a menu document; also cover CLI/Atlas guards and legacy duplicate preservation.
+- [x] Run the focused test and verify it fails before implementing the helper behavior.
+- [x] Implement the CLI guards and sanitized dry-run; add `seed:kurumi` and `test:kurumi-seed` package scripts, and append the focused test to `test:ci`.
+- [x] Run focused tests and build; inspect `--help`/invalid-argument behavior without opening a database connection.
+- [x] Run the dry-run against the confirmed target; verified exactly one matching account and restaurant, 25 official categories, 181 source items, and zero planned deletes.
 
 ### Task 3: Apply the approved seed and verify persisted state
 
 **Files:**
 - No additional source files; use `src/scripts/seedKurumiRestaurant.ts`.
 
-- [ ] Record pre-apply aggregate counts for categories, menu items, and tables; verify the restaurant's existing public fields and payment settings will only be changed where specified.
-- [ ] Run the script with `--apply --confirm-db QDish --confirm-host <configured-host>` for the approved account; do not print or pass its password.
-- [ ] Query back counts and representative items (including an add-on, an item with an image, and an item without one); verify profile details, prices, availability, and images against the snapshot.
-- [ ] Verify existing table count, legacy item records, owner/email, subscription, and payment fields remain unchanged; verify no duplicate `Latte Sữa Yến Mạch` was inserted.
-- [ ] Run `npm run build` and `npm run test:ci`; inspect `git diff --check`, staged diff, and repository CI configuration. Do not claim GitHub CI passed unless that check actually ran.
-- [ ] Commit the implementation after local verification; do not push without an authorized/established push step.
+- [x] Record pre-apply aggregate counts for categories, menu items, and tables; verify the restaurant's existing public fields and payment settings will only be changed where specified (4 categories, 5 menu items, 10 tables; only public name/address/phone differ).
+- [x] Run the script with `--apply --confirm-db QDish --confirm-host <configured-host>` for the approved account; do not print or pass its password.
+- [x] Query back counts and all 181 official item records (including entries with and without images); verify profile details, prices, availability, and images against the snapshot.
+- [x] Verify existing table count, legacy item records, owner/email, subscription, and payment fields remain unchanged; verify no duplicate `Latte Sữa Yến Mạch` was inserted. A second dry-run reports 29 categories, 186 total items, 10 tables, and zero creates.
+- [x] Run `npm run build` and `npm run test:ci`; inspect `git diff --check`, staged diff, and repository CI configuration. GitHub CI was not run.
+- [x] Commit the implementation after local verification; do not push without an authorized/established push step.
 
 ## Risk controls
 

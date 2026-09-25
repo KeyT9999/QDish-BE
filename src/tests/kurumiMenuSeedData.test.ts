@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import {
+  assertKurumiSeedTarget,
   buildMenuItemListingPatch,
+  indexExistingMenuMatches,
   menuItemKey,
-  normalizeKurumiMenuSections
+  normalizeKurumiMenuSections,
+  parseKurumiSeedOptions
 } from "../scripts/kurumiMenuSeedData.js";
 import { kurumiDaNangMenuSnapshot } from "../scripts/kurumiDaNangMenuSnapshot.js";
 
@@ -29,6 +32,75 @@ assert.notEqual(
   menuItemKey(normalizedFixture.items[0]),
   menuItemKey(normalizedFixture.items[1]),
   "different-price variants have distinct repeatable upsert keys"
+);
+assert.equal(
+  menuItemKey(normalizedFixture.items[0]),
+  menuItemKey({ ...normalizedFixture.items[0], category: "  GỌI THÊM  " }),
+  "upsert keys normalize whitespace, Unicode, and case"
+);
+const legacyDuplicate = { category: "Món cũ", name: "Mì chiên giòn", price: 50000 };
+assert.equal(
+  indexExistingMenuMatches([legacyDuplicate, { ...legacyDuplicate }], normalizedFixture.items).size,
+  0,
+  "unrelated duplicate legacy records are preserved and ignored by the import matcher"
+);
+assert.throws(
+  () => indexExistingMenuMatches(
+    [normalizedFixture.items[0], { ...normalizedFixture.items[0] }],
+    normalizedFixture.items
+  ),
+  /ambiguous/i
+);
+
+assert.deepEqual(parseKurumiSeedOptions(["--username", "Anvatcuti2"]), {
+  help: false,
+  username: "anvatcuti2",
+  apply: false,
+  confirmDb: undefined,
+  confirmHost: undefined
+});
+assert.equal(parseKurumiSeedOptions(["--help"]).help, true);
+assert.throws(() => parseKurumiSeedOptions(["--username"]), /username/i);
+assert.throws(() => parseKurumiSeedOptions(["--username", "test", "--apply"]), /confirm/i);
+assert.throws(
+  () => parseKurumiSeedOptions(["--username", "test", "--username", "other"]),
+  /duplicate/i
+);
+assert.throws(
+  () => parseKurumiSeedOptions(["--username", "test", "--unexpected"]),
+  /unknown/i
+);
+
+const guardedApplyOptions = parseKurumiSeedOptions([
+  "--username", "Anvatcuti2", "--apply", "--confirm-db", "QDish",
+  "--confirm-host", "kimthang.mh3rrz2.mongodb.net"
+]);
+const atlasTarget = (host: string, database: string): string =>
+  ["mongodb", "+srv:", "//", host, "/", database].join("");
+assert.equal(
+  assertKurumiSeedTarget(
+    atlasTarget("kimthang.mh3rrz2.mongodb.net", "QDish"),
+    guardedApplyOptions
+  ).hostname,
+  "kimthang.mh3rrz2.mongodb.net"
+);
+assert.throws(
+  () => assertKurumiSeedTarget(
+    atlasTarget("kimthang.mh3rrz2.mongodb.net", "other"),
+    guardedApplyOptions
+  ),
+  /database/i
+);
+assert.throws(
+  () => assertKurumiSeedTarget(
+    atlasTarget("another.mongodb.net", "QDish"),
+    guardedApplyOptions
+  ),
+  /host/i
+);
+assert.throws(
+  () => assertKurumiSeedTarget("mongodb://127.0.0.1:27017/QDish", guardedApplyOptions),
+  /atlas/i
 );
 
 assert.throws(

@@ -34,6 +34,14 @@ export interface MenuItemListingPatch {
   available: boolean;
 }
 
+export interface KurumiSeedOptions {
+  help: boolean;
+  username?: string;
+  apply: boolean;
+  confirmDb?: string;
+  confirmHost?: string;
+}
+
 function normalizeLabel(value: string): string {
   return value.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("vi-VN");
 }
@@ -64,6 +72,111 @@ function normalizeImageUrl(value: string): string {
 
 export function menuItemKey(item: Pick<KurumiMenuItem, "category" | "name" | "price">): string {
   return `${normalizeLabel(item.category)}\u0000${normalizeLabel(item.name)}\u0000${item.price}`;
+}
+
+export function menuCategoryKey(category: string): string {
+  return normalizeLabel(category);
+}
+
+export function indexExistingMenuMatches<T extends { category: string; name: string; price: number }>(
+  existingItems: readonly T[],
+  incomingItems: readonly KurumiMenuItem[]
+): Map<string, T> {
+  const requestedKeys = new Set(incomingItems.map(menuItemKey));
+  const matches = new Map<string, T>();
+  for (const item of existingItems) {
+    const key = menuItemKey(item);
+    if (!requestedKeys.has(key)) continue;
+    if (matches.has(key)) {
+      throw new Error("Ambiguous existing menu item matches an official menu entry");
+    }
+    matches.set(key, item);
+  }
+  return matches;
+}
+
+export function parseKurumiSeedOptions(args: readonly string[]): KurumiSeedOptions {
+  const values = new Map<string, string>();
+  let apply = false;
+  let help = false;
+  const valueFlags = new Set(["--username", "--confirm-db", "--confirm-host"]);
+  const knownFlags = new Set([...valueFlags, "--apply", "--help"]);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index];
+    if (!knownFlags.has(flag)) throw new Error(`Unknown option: ${flag}`);
+    if (values.has(flag) || (flag === "--apply" && apply) || (flag === "--help" && help)) {
+      throw new Error(`Duplicate option: ${flag}`);
+    }
+
+    if (flag === "--apply") {
+      apply = true;
+      continue;
+    }
+    if (flag === "--help") {
+      help = true;
+      continue;
+    }
+
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}`);
+    values.set(flag, value);
+    index += 1;
+  }
+
+  if (help) {
+    if (args.length !== 1) throw new Error("--help cannot be combined with other options");
+    return { help: true, apply: false };
+  }
+
+  const rawUsername = values.get("--username");
+  if (!rawUsername || !/^[a-zA-Z0-9._-]{1,64}$/.test(rawUsername)) {
+    throw new Error("A valid --username is required");
+  }
+
+  const confirmDb = values.get("--confirm-db");
+  const confirmHost = values.get("--confirm-host");
+  if (!apply && (confirmDb || confirmHost)) {
+    throw new Error("Confirmation options require --apply");
+  }
+  if (apply) {
+    if (confirmDb !== "QDish") throw new Error("--apply requires --confirm-db QDish");
+    if (!confirmHost || !/^[a-z0-9.-]+$/i.test(confirmHost)) {
+      throw new Error("--apply requires a valid --confirm-host");
+    }
+  }
+
+  return {
+    help: false,
+    username: rawUsername.toLocaleLowerCase("en-US"),
+    apply,
+    confirmDb,
+    confirmHost: confirmHost?.toLocaleLowerCase("en-US")
+  };
+}
+
+export function assertKurumiSeedTarget(uri: string, options: KurumiSeedOptions): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw new Error("Configured MongoDB target is invalid");
+  }
+
+  const databaseName = decodeURIComponent(parsed.pathname.slice(1));
+  if (parsed.protocol !== "mongodb+srv:" || !parsed.hostname.endsWith(".mongodb.net")) {
+    throw new Error("KURUMI seed target must be the approved MongoDB Atlas cluster");
+  }
+  if (databaseName !== "QDish") throw new Error("Configured MongoDB database is not QDish");
+
+  if (options.apply) {
+    if (options.confirmDb !== databaseName) throw new Error("Database confirmation does not match");
+    if (options.confirmHost !== parsed.hostname.toLocaleLowerCase("en-US")) {
+      throw new Error("Host confirmation does not match the configured MongoDB target");
+    }
+  }
+
+  return parsed;
 }
 
 export function normalizeKurumiMenuSections(
