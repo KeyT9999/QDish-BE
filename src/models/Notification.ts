@@ -59,6 +59,7 @@ export interface INotification extends Document {
   paymentTransactionId?: Types.ObjectId;
   actionUrl?: string;
   metadata?: Record<string, unknown>;
+  idempotencyKey?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -137,6 +138,11 @@ const NotificationSchema = new Schema<INotification>(
     },
     metadata: {
       type: Schema.Types.Mixed
+    },
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      maxlength: 120
     }
   },
   { timestamps: true }
@@ -145,5 +151,6 @@ const NotificationSchema = new Schema<INotification>(
 NotificationSchema.index({ createdAt: -1 });
 NotificationSchema.index({ senderId: 1 });
 NotificationSchema.index({ targetType: 1 });
+NotificationSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 export const Notification = mongoose.model<INotification>("Notification", NotificationSchema);

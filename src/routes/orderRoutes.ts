@@ -1,9 +1,11 @@
 import { Router } from "express";
+import { performance } from "node:perf_hooks";
 import { Order, OrderStatus, type IOrder } from "../models/Order.js";
 import mongoose from "mongoose";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { Table } from "../models/Table.js";
 import { TableSession, TableSessionStatus } from "../models/TableSession.js";
+import { UserRole } from "../models/User.js";
 import {
   getCustomerOrderHistory,
   resolveTableSession,
@@ -14,23 +16,75 @@ import {
   resolveActiveBillForSession,
   BillLifecycleError
 } from "../services/billLifecycleService.js";
-import { sendNewOrderNotification } from "../services/emailService.js";
 import { emitNewOrder } from "../realtime/socket.js";
-import { createSystemNotification } from "../services/notificationService.js";
-import { NotificationType, NotificationPriority } from "../models/Notification.js";
-import { User, UserRole } from "../models/User.js";
 import {
   CustomerIdentityError,
-  recordCustomerOrder,
   resolveCustomerForOrder
 } from "../services/customerIdentityService.js";
 import { OwnerRestaurantQuotaLeaseError } from "../services/ownerRestaurantQuotaLeaseService.js";
 import { RestaurantNotAcceptingOrdersError, withActiveRestaurantOrderWrite } from "../services/restaurantOrderWriteService.js";
+import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
+import {
+  assertRestaurantOrderChangesAccess,
+  getOrderChanges,
+  InvalidOrderChangesQueryError,
+  OrderChangesAccessError
+} from "../services/orderChangesService.js";
 
 const router = Router();
 
+// Reconcile orders missed while a restaurant dashboard socket was disconnected.
+router.get("/changes", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN, UserRole.STAFF]), async (req: AuthRequest, res) => {
+  const restaurantId = typeof req.query.restaurantId === "string" ? req.query.restaurantId : "";
+  const sinceValue = typeof req.query.since === "string" ? req.query.since : "";
+  const snapshotValue = typeof req.query.snapshotAt === "string" ? req.query.snapshotAt : undefined;
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const limitValue = typeof req.query.limit === "string" ? req.query.limit : undefined;
+
+  if (!mongoose.isValidObjectId(restaurantId)) {
+    return res.status(400).json({ message: "restaurantId không hợp lệ", code: "INVALID_RESTAURANT_ID" });
+  }
+
+  const since = new Date(sinceValue);
+  const snapshotAt = snapshotValue ? new Date(snapshotValue) : undefined;
+  const limit = limitValue === undefined ? 100 : Number(limitValue);
+  if (
+    !sinceValue || !Number.isFinite(since.getTime()) ||
+    (snapshotValue && !Number.isFinite(snapshotAt?.getTime())) ||
+    !Number.isInteger(limit) || limit < 1 || limit > 200
+  ) {
+    return res.status(400).json({ message: "Tham số đồng bộ đơn hàng không hợp lệ", code: "INVALID_ORDER_CHANGES_QUERY" });
+  }
+  if (Date.now() - since.getTime() > 7 * 24 * 60 * 60 * 1000) {
+    return res.status(410).json({ message: "Mốc đồng bộ đã hết hạn; hãy tải lại danh sách hiện tại.", code: "ORDER_CHANGES_CURSOR_EXPIRED" });
+  }
+
+  try {
+    const restaurant = await Restaurant.findById(restaurantId)
+      .select("ownerId archivedAt status active")
+      .lean();
+    if (!req.auth) return res.status(401).json({ message: "Thiếu thông tin xác thực" });
+    assertRestaurantOrderChangesAccess(req.auth, restaurantId, restaurant);
+
+    const result = await getOrderChanges({ restaurantId, since, snapshotAt, cursor, limit });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof OrderChangesAccessError) {
+      return res.status(error.statusCode).json({ message: error.message, code: error.code });
+    }
+    if (error instanceof InvalidOrderChangesQueryError) {
+      return res.status(error.statusCode).json({ message: error.message, code: error.code });
+    }
+    console.error("Không thể đồng bộ các thay đổi đơn hàng", error);
+    return res.status(500).json({ message: "Không thể đồng bộ đơn hàng" });
+  }
+});
+
 // Khách hàng đặt món (không cần auth)
 router.post("/", async (req, res) => {
+  const requestStartedAt = performance.now();
+  const requestId = typeof res.locals.requestId === "string" ? res.locals.requestId : "untracked";
   const {
     restaurantId,
     tableNumber,
@@ -167,13 +221,24 @@ router.post("/", async (req, res) => {
 
   let bill: any;
   const totalAmount = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const stageTimings = {
+    leaseWaitMs: 0,
+    restaurantGateMs: 0,
+    writeMs: 0,
+    billResolveMs: 0,
+    orderInsertMs: 0,
+    billAppendMs: 0
+  };
 
   let order: IOrder;
   try {
     order = await withActiveRestaurantOrderWrite(restaurant._id, restaurant.ownerId, async () => {
       // Bill creation must share the archive lease with the order write. Otherwise
       // a stale session request can create an unpaid bill after archive finalizes.
+      let stageStartedAt = performance.now();
       bill = await resolveActiveBillForSession(session);
+      stageTimings.billResolveMs = performance.now() - stageStartedAt;
+      stageStartedAt = performance.now();
       const createdOrder = await Order.create({
         restaurantId: new mongoose.Types.ObjectId(restaurantId),
         tableNumber,
@@ -186,11 +251,27 @@ router.post("/", async (req, res) => {
         totalAmount,
         status: OrderStatus.PENDING,
         note,
-        customerName: normalizedCustomerName || undefined
+        customerName: normalizedCustomerName || undefined,
+        sideEffects: {
+          status: "pending",
+          requestId,
+          nextAttemptAt: new Date(Date.now() + 2000),
+          notification: { status: "pending", attempts: 0 },
+          email: { status: "pending", attempts: 0 },
+          customerStats: {
+            status: customerLink.customer ? "pending" : "skipped",
+            attempts: 0,
+            customerId: customerLink.customer?._id,
+            sessionWasLinked: customerLink.sessionWasLinked
+          }
+        }
       });
+      stageTimings.orderInsertMs = performance.now() - stageStartedAt;
+      stageStartedAt = performance.now();
       bill = await appendOrderToBill(createdOrder, session);
+      stageTimings.billAppendMs = performance.now() - stageStartedAt;
       return createdOrder;
-    });
+    }, timing => Object.assign(stageTimings, timing));
   } catch (error) {
     if (error instanceof RestaurantNotAcceptingOrdersError) {
       return res.status(404).json({ message: "Không tìm thấy nhà hàng đang hoạt động" });
@@ -205,70 +286,27 @@ router.post("/", async (req, res) => {
     return res.status(500).json({ message: "Không thể lưu đơn hàng" });
   }
 
-  if (customerLink.customer) {
-    try {
-      await recordCustomerOrder(
-        customerLink.customer._id,
-        totalAmount,
-        customerLink.sessionWasLinked
-      );
-    } catch (error) {
-      console.error("Không thể cập nhật thống kê hồ sơ khách hàng", error);
-    }
-  }
-
-  emitNewOrder(restaurantId, order.toJSON());
-
-  // Auto notification: new order
-  try {
-    const restaurantStaff = await User.find({
-      restaurantId: new mongoose.Types.ObjectId(restaurantId),
-      role: { $in: [UserRole.RESTAURANT_ADMIN, UserRole.STAFF] },
-      isActive: true
-    }).select("_id");
-
-    const itemCount = items.reduce((sum: number, item: any) => sum + item.quantity, 0);
-    if (restaurantStaff.length > 0) {
-      await createSystemNotification({
-        title: "Đơn hàng mới",
-        message: `Bàn ${tableNumber} vừa đặt ${itemCount} món - ${totalAmount.toLocaleString("vi-VN")}đ`,
-        type: NotificationType.ORDER,
-        priority: NotificationPriority.URGENT,
-        recipientUserIds: restaurantStaff.map(s => s._id),
-        restaurantId,
-        orderId: order._id.toString(),
-        actionUrl: `/dashboard?tab=orders`
-      });
-    }
-  } catch (notifError) {
-    console.error("Không thể gửi notification đơn hàng mới", notifError);
-  }
-
-  // Gửi email thông báo đơn hàng mới cho chủ quán
-  try {
-    if (restaurant && restaurant.email) {
-      await sendNewOrderNotification({
-        to: restaurant.email,
-        restaurantName: restaurant.name,
-        ownerName: restaurant.ownerName,
-        orderId: order._id.toString(),
-        tableNumber,
-        items: items.map(item => ({
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity
-        })),
-        totalAmount,
-        note,
-        orderTime: order.createdAt || new Date()
-      });
-    }
-  } catch (emailError) {
-    // Không làm gián đoạn việc tạo đơn hàng nếu gửi email thất bại
-    console.error("Không thể gửi email thông báo đơn hàng mới", emailError);
-  }
-
-  res.status(201).json(order);
+  const responseOrder = order.toJSON();
+  const emittedAt = new Date().toISOString();
+  emitNewOrder(restaurantId, responseOrder, { requestId, emittedAt });
+  const realtimeEmitMs = performance.now() - requestStartedAt;
+  res.once("finish", () => {
+    console.info(JSON.stringify({
+      event: "order_create_timing",
+      requestId,
+      orderId: order._id.toString(),
+      restaurantId,
+      leaseWaitMs: Number(stageTimings.leaseWaitMs.toFixed(2)),
+      restaurantGateMs: Number(stageTimings.restaurantGateMs.toFixed(2)),
+      billResolveMs: Number(stageTimings.billResolveMs.toFixed(2)),
+      orderInsertMs: Number(stageTimings.orderInsertMs.toFixed(2)),
+      billAppendMs: Number(stageTimings.billAppendMs.toFixed(2)),
+      writeMs: Number(stageTimings.writeMs.toFixed(2)),
+      timeToRealtimeEmitMs: Number(realtimeEmitMs.toFixed(2)),
+      responseMs: Number((performance.now() - requestStartedAt).toFixed(2))
+    }));
+  });
+  return res.status(201).json(responseOrder);
 });
 
 // Lấy đơn hàng theo restaurantId và tableNumber (cho khách xem)

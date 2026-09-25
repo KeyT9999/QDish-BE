@@ -188,11 +188,55 @@ export async function resolveCustomerForOrder(
   return { customer, sessionWasLinked };
 }
 
+const CUSTOMER_ORDER_STATS_DEDUPE_WINDOW = 2048;
+
+export function buildCustomerOrderStatsPipeline(
+  orderId: string,
+  totalAmount: number,
+  sessionWasLinked: boolean,
+  now = new Date()
+) {
+  const processed = { $in: [orderId, { $ifNull: ["$processedOrderStatsKeys", []] }] };
+  const existingKeys = { $ifNull: ["$processedOrderStatsKeys", []] };
+  return [
+    {
+      $set: {
+        orderCount: {
+          $cond: [processed, { $ifNull: ["$orderCount", 0] }, { $add: [{ $ifNull: ["$orderCount", 0] }, 1] }]
+        },
+        totalSpend: {
+          $cond: [processed, { $ifNull: ["$totalSpend", 0] }, { $add: [{ $ifNull: ["$totalSpend", 0] }, Math.max(0, totalAmount)] }]
+        },
+        visitCount: {
+          $cond: [processed, { $ifNull: ["$visitCount", 0] }, { $add: [{ $ifNull: ["$visitCount", 0] }, sessionWasLinked ? 1 : 0] }]
+        },
+        lastSeenAt: { $cond: [processed, "$lastSeenAt", now] },
+        processedOrderStatsKeys: {
+          $cond: [
+            processed,
+            existingKeys,
+            { $slice: [{ $concatArrays: [existingKeys, [orderId]] }, -CUSTOMER_ORDER_STATS_DEDUPE_WINDOW] }
+          ]
+        }
+      }
+    }
+  ];
+}
+
 export async function recordCustomerOrder(
   customerId: unknown,
   totalAmount: number,
-  sessionWasLinked: boolean
+  sessionWasLinked: boolean,
+  orderId?: string
 ) {
+  if (orderId) {
+    await RestaurantCustomer.updateOne(
+      { _id: customerId },
+      buildCustomerOrderStatsPipeline(orderId, totalAmount, sessionWasLinked)
+    );
+    return;
+  }
+
   await RestaurantCustomer.updateOne(
     { _id: customerId },
     {

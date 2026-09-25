@@ -202,6 +202,8 @@ export interface NewOrderNotificationParams {
   restaurantName: string;
   ownerName?: string;
   orderId: string;
+  /** Stable across retries; SMTP remains at-least-once (providers may ignore Message-ID dedupe). */
+  messageId?: string;
   tableNumber: string;
   items: Array<{ name: string; price: number; quantity: number }>;
   totalAmount: number;
@@ -214,6 +216,7 @@ export const sendNewOrderNotification = async ({
   restaurantName,
   ownerName,
   orderId,
+  messageId,
   tableNumber,
   items,
   totalAmount,
@@ -304,6 +307,7 @@ export const sendNewOrderNotification = async ({
   await transporter.sendMail({
     from,
     to,
+    ...(messageId ? { messageId } : {}),
     subject: `🔔 Đơn hàng mới - Bàn ${tableNumber} - ${restaurantName}`,
     text,
     html

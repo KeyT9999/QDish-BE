@@ -149,8 +149,15 @@ export const initRealtime = (server: HttpServer) => {
 // Order Events (existing)
 // ──────────────────────────────────────────
 
-export const emitNewOrder = (restaurantId: string, order: unknown) => {
-  io?.to(getRestaurantRoom(restaurantId)).emit("new-order", order);
+export const emitNewOrder = (
+  restaurantId: string,
+  order: unknown,
+  trace?: { requestId: string; emittedAt: string }
+) => {
+  const payload = trace && order && typeof order === "object"
+    ? { ...(order as Record<string, unknown>), realtimeTrace: trace }
+    : order;
+  io?.to(getRestaurantRoom(restaurantId)).emit("new-order", payload);
 };
 
 export const emitOrderUpdated = (restaurantId: string, order: unknown) => {

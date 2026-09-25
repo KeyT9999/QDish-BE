@@ -15,6 +15,7 @@ export interface IRestaurantCustomer extends Document {
   visitCount: number;
   orderCount: number;
   totalSpend: number;
+  processedOrderStatsKeys?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -58,7 +59,8 @@ const RestaurantCustomerSchema = new Schema<IRestaurantCustomer>(
     lastSeenAt: { type: Date, default: Date.now, required: true },
     visitCount: { type: Number, default: 0, min: 0 },
     orderCount: { type: Number, default: 0, min: 0 },
-    totalSpend: { type: Number, default: 0, min: 0 }
+    totalSpend: { type: Number, default: 0, min: 0 },
+    processedOrderStatsKeys: { type: [String], select: false, default: undefined }
   },
   { timestamps: true }
 );
