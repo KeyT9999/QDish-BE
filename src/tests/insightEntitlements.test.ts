@@ -11,6 +11,9 @@ const completeInsights = {
   topDishes: [{ dishId: "dish-1", name: "Chicken Bowl", orderCount: 5, revenue: 500000 }],
   customerSegments: [{ segment: "BALANCED", count: 3, label: "Balanced" }],
   surveyResponseCount: 3,
+  realSurveyResponseCount: 3,
+  demoSurveyResponseCount: 0,
+  completedOrderCount: 2,
   gapAnalysis: ["Add vegan dishes"],
   peakHours: {
     periods: [{ period: "Lunch", count: 5, percentage: 100 }],
