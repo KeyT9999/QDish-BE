@@ -33,6 +33,7 @@ import billRoutes from "./routes/billRoutes.js";
 import { initRealtime } from "./realtime/socket.js";
 import { initSubscriptionCronJob } from "./services/subscriptionCronJob.js";
 import { initOrderSideEffectsWorker } from "./services/orderSideEffectsWorker.js";
+import { initTableSessionExpiryWorker } from "./services/tableSessionExpiryWorker.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -95,6 +96,7 @@ connectDB().then(() => {
   initRealtime(httpServer);
   initSubscriptionCronJob();
   initOrderSideEffectsWorker();
+  initTableSessionExpiryWorker();
 
   httpServer.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);

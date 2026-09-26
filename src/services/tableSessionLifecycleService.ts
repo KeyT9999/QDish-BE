@@ -1,10 +1,13 @@
 import mongoose, { Types } from "mongoose";
 
+import { Bill } from "../models/Bill.js";
 import { Order, OrderStatus, PaymentMethod } from "../models/Order.js";
 import { Table, TableStatus } from "../models/Table.js";
 import { SessionCreatedBy, TableSession, TableSessionStatus, generateSessionCode } from "../models/TableSession.js";
 import { Restaurant } from "../models/Restaurant.js";
 import { withOwnerRestaurantQuotaLease } from "./ownerRestaurantQuotaLeaseService.js";
+import { withActiveRestaurantOrderWrite } from "./restaurantOrderWriteService.js";
+import { expireIdleTableSession, isIdleScanOnlySession } from "./tableSessionExpiryService.js";
 
 export const ACTIVE_TABLE_SESSION_STATUSES = [
   TableSessionStatus.OPEN,
@@ -25,7 +28,9 @@ type TableSessionLifecycleDeps = {
   Table: any;
   TableSession: any;
   Order: any;
+  Bill?: any;
   withQuotaLease?: typeof withOwnerRestaurantQuotaLease;
+  withOrderWrite?: typeof withActiveRestaurantOrderWrite;
 };
 
 const defaultDeps: TableSessionLifecycleDeps = {
@@ -33,7 +38,9 @@ const defaultDeps: TableSessionLifecycleDeps = {
   Table,
   TableSession,
   Order,
-  withQuotaLease: withOwnerRestaurantQuotaLease
+  Bill,
+  withQuotaLease: withOwnerRestaurantQuotaLease,
+  withOrderWrite: withActiveRestaurantOrderWrite
 };
 
 const toObjectId = (value: string | Types.ObjectId, fieldName: string) => {
@@ -150,6 +157,22 @@ const findActiveSessionByTable = async (
   });
 };
 
+const expireStaleSession = async (deps: TableSessionLifecycleDeps, session: any) => {
+  if (!isIdleScanOnlySession(session, new Date())) return null;
+
+  return expireIdleTableSession(
+    { sessionId: session._id },
+    {
+      Restaurant: deps.Restaurant,
+      TableSession: deps.TableSession,
+      Table: deps.Table,
+      Order: deps.Order,
+      Bill: deps.Bill,
+      withOrderWrite: deps.withOrderWrite
+    }
+  );
+};
+
 export const resolveTableSession = async (
   input: {
     restaurantId: string | Types.ObjectId;
@@ -170,7 +193,7 @@ export const resolveTableSession = async (
     ownerId = restaurant.ownerId;
   }
 
-  const table = await deps.Table.findOne({
+  let table = await deps.Table.findOne({
     restaurantId: restaurantObjectId,
     code: tableNumber,
     isActive: true
@@ -188,25 +211,33 @@ export const resolveTableSession = async (
       activeSession.tableNumber === tableNumber &&
       isActiveSessionStatus(activeSession.status)
     ) {
-      const updatedTable = await updateTableForActiveSession(deps, table._id, activeSession);
-      return { session: activeSession, table: updatedTable || table, created: false };
+      const expired = await expireStaleSession(deps, activeSession);
+      if (!expired) {
+        const updatedTable = await updateTableForActiveSession(deps, table._id, activeSession);
+        return { session: activeSession, table: updatedTable || table, created: false };
+      }
+      table = expired.table || table;
+    } else {
+      await deps.Table.findByIdAndUpdate(
+        table._id,
+        {
+          status: TableStatus.AVAILABLE,
+          activeSessionId: null,
+          currentSessionCode: null
+        },
+        { new: true }
+      );
     }
-
-    await deps.Table.findByIdAndUpdate(
-      table._id,
-      {
-        status: TableStatus.AVAILABLE,
-        activeSessionId: null,
-        currentSessionCode: null
-      },
-      { new: true }
-    );
   }
 
   const existingSession = await findActiveSessionByTable(deps, restaurantObjectId, tableNumber);
   if (existingSession) {
-    const updatedTable = await updateTableForActiveSession(deps, table._id, existingSession);
-    return { session: existingSession, table: updatedTable || table, created: false };
+    const expired = await expireStaleSession(deps, existingSession);
+    if (!expired) {
+      const updatedTable = await updateTableForActiveSession(deps, table._id, existingSession);
+      return { session: existingSession, table: updatedTable || table, created: false };
+    }
+    table = expired.table || table;
   }
 
   const sessionCode = generateSessionCode(tableNumber);

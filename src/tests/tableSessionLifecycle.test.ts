@@ -91,6 +91,83 @@ async function testResolveRepairsClosedActiveSession() {
   assert.notEqual(result.session._id.toString(), ids.closedSession.toString());
 }
 
+async function testResolveExpiresStaleScanOnlySessionBeforeCreatingNewOne() {
+  const table: any = makeDoc({
+    _id: ids.table,
+    restaurantId: ids.restaurant,
+    code: "15",
+    isActive: true,
+    status: TableStatus.OCCUPIED,
+    activeSessionId: ids.closedSession,
+    currentSessionCode: "STALE"
+  });
+  const staleSession = makeDoc({
+    _id: ids.closedSession,
+    restaurantId: ids.restaurant,
+    tableId: ids.table,
+    tableNumber: "15",
+    sessionCode: "STALE",
+    status: TableSessionStatus.OPEN,
+    createdBy: "CUSTOMER_SCAN",
+    openedAt: new Date(Date.now() - (15 * 60 * 1000 + 1000)),
+    orderCount: 0,
+    metadata: {}
+  });
+  const sessions: any[] = [staleSession];
+
+  const deps = {
+    Table: {
+      findOne: async () => table,
+      findOneAndUpdate: async (_filter: any, update: any) => {
+        Object.assign(table, update.$set || update);
+        return table;
+      },
+      findByIdAndUpdate: async (_id: any, update: any) => {
+        Object.assign(table, update.$set || update);
+        return table;
+      }
+    },
+    TableSession: {
+      findById: async (id: any) => sessions.find((session) => session._id.equals(id)) || null,
+      findOne: async (filter: any) => sessions.find((session) => {
+        if (filter._id && !session._id.equals(filter._id)) return false;
+        if (filter.restaurantId && !session.restaurantId.equals(filter.restaurantId)) return false;
+        if (filter.tableNumber && session.tableNumber !== filter.tableNumber) return false;
+        if (filter.status?.$in && !filter.status.$in.includes(session.status)) return false;
+        if (filter.status && typeof filter.status === "string" && session.status !== filter.status) return false;
+        if (filter.createdBy && session.createdBy !== filter.createdBy) return false;
+        if (filter.orderCount === 0 && session.orderCount !== 0) return false;
+        if (filter.openedAt?.$lte && session.openedAt > filter.openedAt.$lte) return false;
+        return true;
+      }) || null,
+      findOneAndUpdate: async (filter: any, update: any) => {
+        const session = sessions.find((candidate) => candidate._id.equals(filter._id) && candidate.status === filter.status && candidate.orderCount === filter.orderCount);
+        if (!session) return null;
+        Object.assign(session, update.$set || {});
+        return session;
+      },
+      create: async (payload: any) => {
+        const created = makeDoc({ ...payload, _id: ids.openSession });
+        sessions.push(created);
+        return created;
+      }
+    },
+    Order: { exists: async () => false },
+    Bill: { findOneAndUpdate: async () => null },
+    withOrderWrite: undefined
+  };
+
+  const result = await resolveTableSession({
+    restaurantId: ids.restaurant.toString(),
+    tableNumber: "15"
+  }, deps as any);
+
+  assert.equal(staleSession.status, TableSessionStatus.CANCELLED);
+  assert.equal(result.session._id.toString(), ids.openSession.toString());
+  assert.equal(table.status, TableStatus.OCCUPIED);
+  assert.equal(table.activeSessionId.toString(), ids.openSession.toString());
+}
+
 async function testResolveRejectsArchivedRestaurantBeforeCreatingSession() {
   let tableReads = 0;
   let sessionCreates = 0;
@@ -317,6 +394,7 @@ async function testCustomerHistoryIsScopedToActiveSession() {
 
 async function run() {
   await testResolveRepairsClosedActiveSession();
+  await testResolveExpiresStaleScanOnlySessionBeforeCreatingNewOne();
   await testResolveRejectsArchivedRestaurantBeforeCreatingSession();
   await testResolveRechecksArchiveStateInsideOwnerLeaseBeforeCreatingSession();
   await testCloseSessionMarksPaidAndReleasesTable();

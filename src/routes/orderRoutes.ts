@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { performance } from "node:perf_hooks";
 import { Order, OrderStatus, type IOrder } from "../models/Order.js";
+import { Bill } from "../models/Bill.js";
 import mongoose from "mongoose";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
 import { Table } from "../models/Table.js";
@@ -11,6 +12,11 @@ import {
   resolveTableSession,
   TableSessionLifecycleError
 } from "../services/tableSessionLifecycleService.js";
+import {
+  expireIdleTableSession,
+  expireIdleTableSessionWithinOrderWrite,
+  isIdleScanOnlySession
+} from "../services/tableSessionExpiryService.js";
 import {
   appendOrderToBill,
   resolveActiveBillForSession,
@@ -177,6 +183,15 @@ router.post("/", async (req, res) => {
         message: "Phiên bàn không hợp lệ hoặc đã kết thúc. Vui lòng quét lại mã QR."
       });
     }
+
+    if (isIdleScanOnlySession(session, new Date())) {
+      const expired = await expireIdleTableSession({ sessionId: session._id });
+      if (expired) {
+        return res.status(400).json({
+          message: "Phiên bàn đã hết hạn vì chưa có món được gọi. Vui lòng quét lại mã QR."
+        });
+      }
+    }
   } else {
     try {
       const resolved = await resolveTableSession({ restaurantId, tableNumber });
@@ -233,6 +248,46 @@ router.post("/", async (req, res) => {
   let order: IOrder;
   try {
     order = await withActiveRestaurantOrderWrite(restaurant._id, restaurant.ownerId, async () => {
+      const currentSession = await TableSession.findOne({
+        _id: session?._id,
+        restaurantId: new mongoose.Types.ObjectId(restaurantId),
+        tableNumber,
+        status: { $in: [TableSessionStatus.OPEN, TableSessionStatus.PAYMENT_REQUESTED] }
+      });
+
+      if (!currentSession) {
+        throw new TableSessionLifecycleError(400, "Phiên bàn đã kết thúc. Vui lòng quét lại mã QR.");
+      }
+
+      if (isIdleScanOnlySession(currentSession, new Date())) {
+        const expired = await expireIdleTableSessionWithinOrderWrite(
+          { sessionId: currentSession._id },
+          {
+            TableSession,
+            Table,
+            Order,
+            Bill,
+            withOrderWrite: undefined
+          }
+        );
+        if (expired) {
+          throw new TableSessionLifecycleError(
+            400,
+            "Phiên bàn đã hết hạn vì chưa có món được gọi. Vui lòng quét lại mã QR."
+          );
+        }
+      }
+
+      session = await TableSession.findOne({
+        _id: currentSession._id,
+        restaurantId: new mongoose.Types.ObjectId(restaurantId),
+        tableNumber,
+        status: { $in: [TableSessionStatus.OPEN, TableSessionStatus.PAYMENT_REQUESTED] }
+      });
+      if (!session) {
+        throw new TableSessionLifecycleError(400, "Phiên bàn đã kết thúc. Vui lòng quét lại mã QR.");
+      }
+
       // Bill creation must share the archive lease with the order write. Otherwise
       // a stale session request can create an unpaid bill after archive finalizes.
       let stageStartedAt = performance.now();
@@ -278,6 +333,9 @@ router.post("/", async (req, res) => {
     }
     if (error instanceof OwnerRestaurantQuotaLeaseError) {
       return res.status(503).json({ message: "Nhà hàng đang xử lý thao tác khác. Vui lòng thử lại.", code: "RESTAURANT_BUSY" });
+    }
+    if (error instanceof TableSessionLifecycleError) {
+      return res.status(error.statusCode).json({ message: error.message });
     }
     if (error instanceof BillLifecycleError) {
       return res.status(error.statusCode).json({ message: error.message });
