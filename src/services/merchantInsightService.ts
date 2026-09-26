@@ -2,6 +2,7 @@ import { MenuItem } from "../models/MenuItem.js";
 import { Order } from "../models/Order.js";
 import { DishNutritionProfile } from "../models/DishNutritionProfile.js";
 import { AnonymousDiningVisit } from "../models/AnonymousDiningVisit.js";
+import { MerchantInsightDemoSurvey } from "../models/MerchantInsightDemoSurvey.js";
 import mongoose from "mongoose";
 
 export interface MerchantInsights {
@@ -23,6 +24,9 @@ export interface MerchantInsights {
     label: string;
   }>;
   surveyResponseCount: number;
+  realSurveyResponseCount: number;
+  demoSurveyResponseCount: number;
+  completedOrderCount: number;
   gapAnalysis: string[];
   peakHours: {
     periods: Array<{
@@ -57,6 +61,20 @@ export const buildDiningVisitQuery = (
   return query;
 };
 
+export const buildDemoSurveyQuery = (
+  restaurantId: string,
+  start?: Date,
+  end?: Date
+): Record<string, unknown> => {
+  const query: Record<string, unknown> = {
+    restaurantId: new mongoose.Types.ObjectId(restaurantId)
+  };
+  if (start && end) {
+    query.recordedAt = { $gte: start, $lte: end };
+  }
+  return query;
+};
+
 export const aggregateCustomerSegments = (
   visits: Array<{ goalsSnapshot?: string[] }>
 ): MerchantInsights["customerSegments"] => {
@@ -64,7 +82,7 @@ export const aggregateCustomerSegments = (
 
   for (const visit of visits) {
     for (const goal of visit.goalsSnapshot || []) {
-      if (goal in CUSTOMER_SEGMENT_LABELS) {
+      if (Object.prototype.hasOwnProperty.call(CUSTOMER_SEGMENT_LABELS, goal)) {
         counts[goal] = (counts[goal] || 0) + 1;
       }
     }
@@ -83,7 +101,7 @@ export const buildCustomerSegmentsFromCounts = (
   ) as Record<string, number>;
 
   for (const row of rows) {
-    if (row._id in counts) {
+    if (Object.prototype.hasOwnProperty.call(counts, row._id)) {
       counts[row._id] = row.count;
     }
   }
@@ -97,9 +115,28 @@ export const buildCustomerSegmentsFromCounts = (
     .sort((a, b) => b.count - a.count);
 };
 
+export const mergeCustomerSegmentCounts = (
+  ...groups: Array<Array<{ _id: string; count: number }>>
+): MerchantInsights["customerSegments"] => {
+  const counts: Record<string, number> = {};
+  for (const segment of Object.keys(CUSTOMER_SEGMENT_LABELS)) counts[segment] = 0;
+
+  for (const group of groups) {
+    for (const row of group) {
+      if (Object.prototype.hasOwnProperty.call(counts, row._id)) counts[row._id] += row.count;
+    }
+  }
+
+  return buildCustomerSegmentsFromCounts(
+    Object.entries(counts).map(([_id, count]) => ({ _id, count }))
+  );
+};
+
 export const countDiningVisitResponses = (
   visits: Array<{ goalsSnapshot?: string[] }>
 ): number => visits.length;
+
+export const countCompletedOrders = (orders: readonly unknown[]): number => orders.length;
 
 export class MerchantInsightService {
   /**
@@ -191,29 +228,42 @@ export class MerchantInsightService {
 
     // 4. Customer segments from anonymous surveys scoped to this restaurant
     const diningVisitQuery = buildDiningVisitQuery(restaurantId, start, end);
-    const [surveyResponseCount, segmentCounts] = await Promise.all([
+    const demoSurveyQuery = buildDemoSurveyQuery(restaurantId, start, end);
+    const [
+      realSurveyResponseCount,
+      realSegmentCounts,
+      demoSurveyResponseCount,
+      demoSegmentCounts
+    ] = await Promise.all([
       AnonymousDiningVisit.countDocuments(diningVisitQuery),
       AnonymousDiningVisit.aggregate<{ _id: string; count: number }>([
         { $match: diningVisitQuery },
         { $unwind: "$goalsSnapshot" },
         { $group: { _id: "$goalsSnapshot", count: { $sum: 1 } } }
+      ]),
+      MerchantInsightDemoSurvey.countDocuments(demoSurveyQuery),
+      MerchantInsightDemoSurvey.aggregate<{ _id: string; count: number }>([
+        { $match: demoSurveyQuery },
+        { $unwind: "$goalsSnapshot" },
+        { $group: { _id: "$goalsSnapshot", count: { $sum: 1 } } }
       ])
     ]);
-    const customerSegments = buildCustomerSegmentsFromCounts(segmentCounts);
+    const surveyResponseCount = realSurveyResponseCount + demoSurveyResponseCount;
+    const customerSegments = mergeCustomerSegmentCounts(realSegmentCounts, demoSegmentCounts);
 
     // 5. Smart Gap Analysis (AI Advice)
     const gapAnalysis: string[] = [];
     if (!attributesMap["VEGAN"] && !attributesMap["VEGETARIAN"]) {
-      gapAnalysis.push("🌱 Nhà hàng chưa có món ăn Chay / Thuần chay. Bổ sung 1-2 món salad chay hoặc đậu hũ sốt sẽ thu hút thêm 15% thực khách văn phòng ăn kiêng.");
+      gapAnalysis.push("🌱 Chưa thấy món Chay / Thuần chay theo thuộc tính đã khai báo. Có thể cân nhắc thêm salad chay hoặc đậu hũ sốt để đa dạng lựa chọn ăn kiêng.");
     }
     if (!attributesMap["HIGH_PROTEIN"] && !attributesMap["VERY_HIGH_PROTEIN"]) {
-      gapAnalysis.push("💪 Menu thiếu các món Giàu Đạm (>= 25g Protein). Khách hàng tập gym đang có xu hướng tìm các món ăn giàu cơ bắp.");
+      gapAnalysis.push("💪 Chưa thấy món Giàu Đạm (>= 25g Protein) theo thuộc tính đã khai báo. Cân nhắc bổ sung nếu phù hợp định hướng thực đơn.");
     }
     if (!attributesMap["QUICK_BITE"] && !attributesMap["LIGHT_MEAL"]) {
-      gapAnalysis.push("⏱️ Thiếu các món Ăn nhanh / Ăn nhẹ (Quick Bite). Bổ sung các món sandwich nhẹ hoặc soup khai vị có thể tăng tỷ lệ gọi món vào giờ trưa.");
+      gapAnalysis.push("⏱️ Chưa thấy lựa chọn Ăn nhanh / Ăn nhẹ (Quick Bite). Có thể cân nhắc sandwich nhẹ hoặc soup khai vị cho thực đơn.");
     }
     if (!attributesMap["LOW_SUGAR"]) {
-      gapAnalysis.push("🍬 Chưa có lựa chọn Ít đường (Low Sugar) cho đồ uống hoặc món phụ. Cung cấp nước ép ít ngọt sẽ hấp dẫn nhóm khách hàng yêu thích vóc dáng.");
+      gapAnalysis.push("🍬 Chưa thấy lựa chọn Ít đường (Low Sugar) cho đồ uống hoặc món phụ. Có thể cân nhắc thêm nước ép ít ngọt nếu phù hợp menu.");
     }
 
     // Default messages if menu is well balanced
@@ -299,6 +349,9 @@ export class MerchantInsightService {
       topDishes,
       customerSegments,
       surveyResponseCount,
+      realSurveyResponseCount,
+      demoSurveyResponseCount,
+      completedOrderCount: countCompletedOrders(orders),
       gapAnalysis,
       peakHours
     };
