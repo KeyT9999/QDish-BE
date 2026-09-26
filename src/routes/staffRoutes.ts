@@ -5,13 +5,35 @@ import { Order, OrderStatus } from "../models/Order.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import mongoose from "mongoose";
 import { emitBillPaid, emitOrderUpdated, emitTableSessionClosed, emitTableStatusUpdated } from "../realtime/socket.js";
-import { createSystemNotification } from "../services/notificationService.js";
-import { NotificationType, NotificationPriority } from "../models/Notification.js";
 import { TableStatus } from "../models/Table.js";
 import { closeTableSession, TableSessionLifecycleError } from "../services/tableSessionLifecycleService.js";
 import { BillLifecycleError, payBill } from "../services/billLifecycleService.js";
+import { createSystemNotification } from "../services/notificationService.js";
+import { createOrderStatusNotificationScheduler } from "../services/orderStatusNotificationService.js";
 
 const router = Router();
+
+const scheduleOrderStatusNotification = createOrderStatusNotificationScheduler({
+  schedule: (job) => {
+    setImmediate(() => { void job(); });
+  },
+  findStaffUserIds: async (restaurantId) => {
+    const restaurantStaff = await User.find({
+      restaurantId: new mongoose.Types.ObjectId(restaurantId),
+      role: { $in: [UserRole.RESTAURANT_ADMIN, UserRole.STAFF] },
+      isActive: true
+    }).select("_id");
+
+    return restaurantStaff.map((staff) => staff._id.toString());
+  },
+  resolveOwnerId: async (restaurantId) => {
+    const { resolveOwnerByRestaurant } = await import("../services/subscriptionService.js");
+    const ownerId = await resolveOwnerByRestaurant(restaurantId);
+    return ownerId?.toString() || null;
+  },
+  createSystemNotification,
+  logError: (error) => console.error("Không thể gửi notification cập nhật đơn hàng", error)
+});
 
 // Lấy danh sách nhân viên của nhà hàng
 router.get("/", requireAuth, requireRole([UserRole.RESTAURANT_ADMIN] as string[]), async (req: AuthRequest, res) => {
@@ -280,41 +302,15 @@ router.patch("/orders/:id", requireAuth, requireRole([UserRole.STAFF, UserRole.R
   }
 
   emitOrderUpdated(restaurantId, responseOrder.toJSON());
-
-  // Auto notification: order status updated
-  try {
-    const restaurantStaff = await User.find({
-      restaurantId: new mongoose.Types.ObjectId(restaurantId),
-      role: { $in: [UserRole.RESTAURANT_ADMIN, UserRole.STAFF] },
-      isActive: true
-    }).select("_id");
-
-    const recipientUserIds = restaurantStaff.map(s => s._id);
-
-    // Resolve owner
-    const { resolveOwnerByRestaurant } = await import("../services/subscriptionService.js");
-    const ownerId = await resolveOwnerByRestaurant(restaurantId);
-    if (ownerId && !recipientUserIds.some(id => id.toString() === ownerId.toString())) {
-      recipientUserIds.push(ownerId);
-    }
-
-    if (recipientUserIds.length > 0) {
-      await createSystemNotification({
-        title: "Đơn hàng cập nhật",
-        message: `Đơn hàng bàn ${responseOrder.tableNumber} đã chuyển sang trạng thái [${status}] bởi ${updatedByName}`,
-        type: NotificationType.ORDER,
-        priority: NotificationPriority.NORMAL,
-        recipientUserIds,
-        restaurantId,
-        orderId: order._id.toString(),
-        actionUrl: `/dashboard?tab=orders`
-      });
-    }
-  } catch (notifError) {
-    console.error("Không thể gửi notification cập nhật đơn hàng", notifError);
-  }
-
   res.json(responseOrder);
+  scheduleOrderStatusNotification({
+    restaurantId,
+    orderId: order._id.toString(),
+    tableNumber: responseOrder.tableNumber,
+    status: status as OrderStatus,
+    updatedByName,
+    actorUserId: userId
+  });
 });
 
 // Khóa/mở khóa nhân viên
