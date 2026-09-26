@@ -134,6 +134,7 @@ TableSessionSchema.index({ restaurantId: 1, sessionCode: 1 }, { unique: true });
 // Query history
 TableSessionSchema.index({ restaurantId: 1, createdAt: -1 });
 TableSessionSchema.index({ restaurantId: 1, customerId: 1, createdAt: -1 });
+TableSessionSchema.index({ status: 1, createdBy: 1, openedAt: 1 });
 
 // Lookup by tableId
 TableSessionSchema.index({ tableId: 1, status: 1 });
