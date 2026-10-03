@@ -17,6 +17,21 @@ assert.equal(parseRecommendationRequest({ restaurantId, userId: "legacy-guest" }
 assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
   goals: ["BALANCED"], preferences: [], allergies: ["NUTS"],
 }}).ok, true);
+assert.deepEqual(parseRecommendationRequest({ restaurantId, userProfile: {
+  goals: [], preferences: [], allergies: ["NUTS"],
+}}), {
+  ok: true,
+  value: {
+    restaurantId,
+    userProfile: { goals: [], preferences: [], allergies: ["PEANUT", "TREE_NUTS"] },
+  },
+});
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  goals: [], preferences: [], allergies: ["SESAME", "PEANUT"],
+}}).ok, true);
+assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
+  goals: [], preferences: [], allergies: ["NUTS", " nuts "],
+}}).ok, false);
 assert.equal(parseRecommendationRequest({ restaurantId, userProfile: {
   goals: [], preferences: [], allergies: [], conditions: ["DIABETES"],
 }}).ok, false);

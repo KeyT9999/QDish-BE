@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DINING_ALLERGIES } from "../services/diningProfileValidation.js";
 
 export enum OrderStatus {
   PENDING = "PENDING",
@@ -22,6 +23,10 @@ export interface IOrderItem {
   quantity: number;
   allergenInfoStatus?: "UNKNOWN" | "REVIEWED";
   allergenWarnings?: string[];
+  allergenContainsWarnings?: string[];
+  allergenMayContainWarnings?: string[];
+  allergenWarningSource?: "CANDIDATE" | "CONTAINS" | "MAY_CONTAIN" | "MIXED";
+  allergenInformationIncomplete?: boolean;
 }
 
 export interface IOrder extends Document {
@@ -37,6 +42,7 @@ export interface IOrder extends Document {
   status: OrderStatus;
   note?: string;
   reportedAllergies?: string[];
+  allergyDisclosureStatus: "NOT_ANSWERED" | "NONE_DECLARED" | "DECLARED";
   customerName?: string;
   paymentMethod?: PaymentMethod;
   confirmedBy?: Types.ObjectId;
@@ -54,7 +60,11 @@ const OrderItemSchema = new Schema<IOrderItem>({
   price: { type: Number, required: true },
   quantity: { type: Number, required: true, min: 1 },
   allergenInfoStatus: { type: String, enum: ["UNKNOWN", "REVIEWED"], default: "UNKNOWN" },
-  allergenWarnings: { type: [String], default: [] }
+  allergenWarnings: { type: [String], default: [] },
+  allergenContainsWarnings: { type: [String], default: [] },
+  allergenMayContainWarnings: { type: [String], default: [] },
+  allergenWarningSource: { type: String, enum: ["CANDIDATE", "CONTAINS", "MAY_CONTAIN", "MIXED"] },
+  allergenInformationIncomplete: { type: Boolean, default: true }
 });
 
 const OrderSideEffectTaskSchema = new Schema({
@@ -141,8 +151,14 @@ const OrderSchema = new Schema<IOrder>(
     },
     reportedAllergies: {
       type: [String],
-      enum: ["GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH"],
+      enum: DINING_ALLERGIES,
       default: undefined
+    },
+    allergyDisclosureStatus: {
+      type: String,
+      enum: ["NOT_ANSWERED", "NONE_DECLARED", "DECLARED"],
+      default: "NOT_ANSWERED",
+      required: true
     },
     customerName: {
       type: String,

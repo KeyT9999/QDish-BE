@@ -37,6 +37,15 @@ export interface IMenuItem extends Document {
   missingIngredientCount?: number;
   allergens?: string[];
   allergenInfoStatus: "UNKNOWN" | "REVIEWED";
+  allergenCoverageStatus: "UNKNOWN" | "INCOMPLETE" | "COMPLETE";
+  allergenUnverifiedIngredientCount: number;
+  reviewedAllergens: string[];
+  mayContainAllergens: string[];
+  allergenReviewMethod?: "RECIPE" | "MANUAL";
+  allergenReviewSourceType?: "SUPPLIER_LABEL" | "RESTAURANT_RECIPE" | "STAFF_ATTESTATION" | "CURATED_MENU_DESCRIPTION";
+  allergenReviewSourceNote?: string;
+  allergenReviewedBy?: Types.ObjectId;
+  allergenReviewedAt?: Date;
   foodAttributes?: string[];
 }
 
@@ -192,6 +201,23 @@ const MenuItemSchema = new Schema<IMenuItem>(
       default: "UNKNOWN",
       required: true
     },
+    allergenCoverageStatus: {
+      type: String,
+      enum: ["UNKNOWN", "INCOMPLETE", "COMPLETE"],
+      default: "UNKNOWN",
+      required: true
+    },
+    allergenUnverifiedIngredientCount: { type: Number, default: 0, min: 0 },
+    reviewedAllergens: { type: [String], default: [] },
+    mayContainAllergens: { type: [String], default: [] },
+    allergenReviewMethod: { type: String, enum: ["RECIPE", "MANUAL"] },
+    allergenReviewSourceType: {
+      type: String,
+      enum: ["SUPPLIER_LABEL", "RESTAURANT_RECIPE", "STAFF_ATTESTATION", "CURATED_MENU_DESCRIPTION"]
+    },
+    allergenReviewSourceNote: { type: String, trim: true, maxlength: 500 },
+    allergenReviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    allergenReviewedAt: { type: Date },
     foodAttributes: {
       type: [String],
       default: []

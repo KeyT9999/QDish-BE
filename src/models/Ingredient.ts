@@ -14,6 +14,11 @@ export interface IIngredient extends Document {
   sugarPer100g?: number;
   sodiumPer100g?: number; // in mg
   allergens: string[];
+  allergenInfoStatus: "UNKNOWN" | "REVIEWED";
+  allergenInfoSourceType?: "SUPPLIER_LABEL" | "RESTAURANT_RECIPE" | "STAFF_ATTESTATION" | "CURATED_MENU_DESCRIPTION" | "CURATED_REFERENCE_CATALOG";
+  allergenInfoSourceNote?: string;
+  allergenReviewedBy?: Types.ObjectId;
+  allergenReviewedAt?: Date;
   attributes: string[];
   isVerified: boolean;
   restaurantId: Types.ObjectId | null;
@@ -38,6 +43,14 @@ const IngredientSchema = new Schema<IIngredient>(
     sugarPer100g: { type: Number, min: 0 },
     sodiumPer100g: { type: Number, min: 0 },
     allergens: { type: [String], default: [] },
+    allergenInfoStatus: { type: String, enum: ["UNKNOWN", "REVIEWED"], default: "UNKNOWN", required: true },
+    allergenInfoSourceType: {
+      type: String,
+      enum: ["SUPPLIER_LABEL", "RESTAURANT_RECIPE", "STAFF_ATTESTATION", "CURATED_MENU_DESCRIPTION", "CURATED_REFERENCE_CATALOG"]
+    },
+    allergenInfoSourceNote: { type: String, trim: true, maxlength: 500 },
+    allergenReviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    allergenReviewedAt: { type: Date },
     attributes: { type: [String], default: [] },
     isVerified: { type: Boolean, default: false, index: true },
     restaurantId: { type: Schema.Types.ObjectId, ref: "Restaurant", default: null, index: true },

@@ -4,7 +4,7 @@ import { Bill, BillPaymentMethod, BillStatus, generateBillCode } from "../models
 import { Order, OrderStatus, PaymentMethod } from "../models/Order.js";
 import { Table, TableStatus } from "../models/Table.js";
 import { TableSession, TableSessionStatus } from "../models/TableSession.js";
-import { DINING_ALLERGIES } from "./diningProfileValidation.js";
+import { normalizeAllergenCodes } from "./allergenSafetyService.js";
 
 export const ACTIVE_BILL_STATUSES = [
   BillStatus.UNPAID,
@@ -370,12 +370,19 @@ export const appendOrderToBill = async (
       const quantity = Number(item.quantity) || 0;
       const notes = order.note || undefined;
       const allergenInfoStatus = item.allergenInfoStatus === "REVIEWED" ? "REVIEWED" : "UNKNOWN";
-      const allergenWarnings = allergenInfoStatus === "REVIEWED"
-        ? normalizeAllergyCodes(item.allergenWarnings)
-        : [];
-      const reportedAllergies = allergenInfoStatus === "UNKNOWN"
-        ? normalizeAllergyCodes(order.reportedAllergies)
-        : [];
+      const allergenWarnings = normalizeAllergyCodes(item.allergenWarnings);
+      const allergenContainsWarnings = normalizeAllergyCodes(item.allergenContainsWarnings);
+      const allergenMayContainWarnings = normalizeAllergyCodes(item.allergenMayContainWarnings);
+      const allergenWarningSource = ["CANDIDATE", "CONTAINS", "MAY_CONTAIN", "MIXED"].includes(item.allergenWarningSource)
+        ? item.allergenWarningSource
+        : undefined;
+      const allergenInformationIncomplete = item.allergenInformationIncomplete === undefined
+        ? allergenInfoStatus === "UNKNOWN"
+        : item.allergenInformationIncomplete === true;
+      const allergyDisclosureStatus = ["NOT_ANSWERED", "NONE_DECLARED", "DECLARED"].includes(order.allergyDisclosureStatus)
+        ? order.allergyDisclosureStatus
+        : (Array.isArray(order.reportedAllergies) && order.reportedAllergies.length > 0 ? "DECLARED" : "NOT_ANSWERED");
+      const reportedAllergies = normalizeAllergyCodes(order.reportedAllergies);
       const existing = bill.itemsSnapshot.find((snapshot: any) => (
         snapshot.menuItemId === item.menuItemId &&
         snapshot.name === item.name &&
@@ -383,6 +390,11 @@ export const appendOrderToBill = async (
         (snapshot.notes || undefined) === notes &&
         (snapshot.allergenInfoStatus === "REVIEWED" ? "REVIEWED" : "UNKNOWN") === allergenInfoStatus &&
         JSON.stringify(normalizeAllergyCodes(snapshot.allergenWarnings)) === JSON.stringify(allergenWarnings) &&
+        JSON.stringify(normalizeAllergyCodes(snapshot.allergenContainsWarnings)) === JSON.stringify(allergenContainsWarnings) &&
+        JSON.stringify(normalizeAllergyCodes(snapshot.allergenMayContainWarnings)) === JSON.stringify(allergenMayContainWarnings) &&
+        snapshot.allergenWarningSource === allergenWarningSource &&
+        snapshot.allergenInformationIncomplete === allergenInformationIncomplete &&
+        snapshot.allergyDisclosureStatus === allergyDisclosureStatus &&
         JSON.stringify(normalizeAllergyCodes(snapshot.reportedAllergies)) === JSON.stringify(reportedAllergies)
       ));
 
@@ -399,6 +411,11 @@ export const appendOrderToBill = async (
           notes,
           allergenInfoStatus,
           allergenWarnings,
+          allergenContainsWarnings,
+          allergenMayContainWarnings,
+          allergenWarningSource,
+          allergenInformationIncomplete,
+          allergyDisclosureStatus,
           ...(reportedAllergies.length > 0 ? { reportedAllergies } : {})
         });
       }
@@ -427,10 +444,7 @@ export const appendOrderToBill = async (
 
 function normalizeAllergyCodes(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  const submitted = new Set(value.filter((code): code is string => typeof code === "string")
-    .map((code) => code.trim().toUpperCase())
-    .filter((code) => DINING_ALLERGIES.includes(code as typeof DINING_ALLERGIES[number])));
-  return DINING_ALLERGIES.filter((code) => submitted.has(code));
+  return normalizeAllergenCodes(value.filter((code): code is string => typeof code === "string")) ?? [];
 }
 
 export const payBill = async (

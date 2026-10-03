@@ -4,6 +4,8 @@ import { Ingredient } from "../models/Ingredient.js";
 import { IngredientAlias } from "../models/IngredientAlias.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
 import { buildIngredientAccessFilter } from "../services/ingredientAccessService.js";
+import { resolveIngredientAllergenUpdate } from "../services/ingredientAllergenPolicy.js";
+import { invalidateDependentMenuReviews, recomputeDependentMenuAllergens } from "../services/ingredientAllergenImpactService.js";
 
 const router = Router();
 
@@ -62,7 +64,16 @@ router.get("/search", optionalAuth, async (req: AuthRequest, res) => {
     };
 
     const results = await Ingredient.find(queryFilter).limit(15).lean();
-    return res.json(results);
+    const response = req.auth ? results : results.map((ingredient) => {
+      const {
+        allergenInfoSourceNote: _allergenInfoSourceNote,
+        allergenReviewedBy: _allergenReviewedBy,
+        allergenReviewedAt: _allergenReviewedAt,
+        ...publicIngredient
+      } = ingredient;
+      return publicIngredient;
+    });
+    return res.json(response);
   } catch (error: any) {
     console.error("Error searching ingredients:", error);
     return res.status(500).json({ message: "Lỗi hệ thống khi tìm kiếm nguyên liệu" });
@@ -174,11 +185,26 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       fiberPer100g,
       sugarPer100g,
       sodiumPer100g,
-      allergens
+      allergens,
+      allergenInfoStatus,
+      allergenInfoSourceType,
+      allergenInfoSourceNote
     } = req.body;
 
     if (!name || !category || !defaultUnit) {
       return res.status(400).json({ message: "Vui lòng nhập đầy đủ tên, danh mục và đơn vị mặc định" });
+    }
+
+    const allergenPolicy = resolveIngredientAllergenUpdate({ allergens: [], allergenInfoStatus: "UNKNOWN" }, {
+      allergens,
+      allergenInfoStatus,
+      allergenInfoSourceType,
+      allergenInfoSourceNote,
+      reviewerId: req.auth?.sub ?? "",
+      now: new Date()
+    });
+    if (!allergenPolicy.ok) {
+      return res.status(400).json({ message: "Thông tin allergen hoặc bằng chứng xác nhận không hợp lệ" });
     }
 
     let isVerified = false;
@@ -222,7 +248,12 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
       fiberPer100g,
       sugarPer100g,
       sodiumPer100g,
-      allergens: allergens ?? [],
+      allergens: allergenPolicy.value.allergens,
+      allergenInfoStatus: allergenPolicy.value.allergenInfoStatus,
+      allergenInfoSourceType: allergenPolicy.value.allergenInfoSourceType,
+      allergenInfoSourceNote: allergenPolicy.value.allergenInfoSourceNote,
+      allergenReviewedBy: allergenPolicy.value.allergenReviewedBy,
+      allergenReviewedAt: allergenPolicy.value.allergenReviewedAt,
       isVerified,
       restaurantId: tenantId,
       source,
@@ -251,7 +282,30 @@ router.post("/custom", requireAuth, async (req: AuthRequest, res) => {
     if (!restaurantId) {
       return res.status(403).json({ message: "Chỉ admin nhà hàng mới có quyền tạo nguyên liệu tùy chỉnh" });
     }
-    const { name, ...rest } = req.body;
+    const {
+      name,
+      allergens,
+      allergenInfoStatus,
+      allergenInfoSourceType,
+      allergenInfoSourceNote,
+      allergenReviewedBy: _clientAllergenReviewer,
+      allergenReviewedAt: _clientAllergenReviewedAt,
+      ...rest
+    } = req.body;
+    if (req.auth?.role !== "RESTAURANT_ADMIN" && req.auth?.role !== "RESTAURANT_OWNER") {
+      return res.status(403).json({ message: "Bạn không có quyền thực hiện chức năng này" });
+    }
+    const allergenPolicy = resolveIngredientAllergenUpdate({ allergens: [], allergenInfoStatus: "UNKNOWN" }, {
+      allergens,
+      allergenInfoStatus,
+      allergenInfoSourceType,
+      allergenInfoSourceNote,
+      reviewerId: req.auth?.sub ?? "",
+      now: new Date()
+    });
+    if (!allergenPolicy.ok) {
+      return res.status(400).json({ message: "Thông tin allergen hoặc bằng chứng xác nhận không hợp lệ" });
+    }
     const slug = `${restaurantId}-${normalizeString(name).replace(/\s+/g, "-")}`;
     const existing = await Ingredient.findOne({ slug });
     if (existing) {
@@ -261,6 +315,12 @@ router.post("/custom", requireAuth, async (req: AuthRequest, res) => {
     const ingredient = await Ingredient.create({
       ...rest,
       name,
+      allergens: allergenPolicy.value.allergens,
+      allergenInfoStatus: allergenPolicy.value.allergenInfoStatus,
+      allergenInfoSourceType: allergenPolicy.value.allergenInfoSourceType,
+      allergenInfoSourceNote: allergenPolicy.value.allergenInfoSourceNote,
+      allergenReviewedBy: allergenPolicy.value.allergenReviewedBy,
+      allergenReviewedAt: allergenPolicy.value.allergenReviewedAt,
       slug,
       isVerified: false,
       restaurantId: new mongoose.Types.ObjectId(restaurantId),
@@ -324,7 +384,10 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       fiberPer100g,
       sugarPer100g,
       sodiumPer100g,
-      allergens
+      allergens,
+      allergenInfoStatus,
+      allergenInfoSourceType,
+      allergenInfoSourceNote
     } = req.body;
 
     if (name && name.trim() !== ingredient.name) {
@@ -362,11 +425,57 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     if (fiberPer100g !== undefined) ingredient.fiberPer100g = fiberPer100g;
     if (sugarPer100g !== undefined) ingredient.sugarPer100g = sugarPer100g;
     if (sodiumPer100g !== undefined) ingredient.sodiumPer100g = sodiumPer100g;
-    if (allergens !== undefined) ingredient.allergens = allergens;
+
+    const allergenFieldsProvided = ["allergens", "allergenInfoStatus", "allergenInfoSourceType", "allergenInfoSourceNote"]
+      .some((field) => Object.prototype.hasOwnProperty.call(req.body, field));
+    let affectedMenuItemIds: string[] = [];
+    let allergenImpact: Awaited<ReturnType<typeof recomputeDependentMenuAllergens>> | undefined;
+    if (allergenFieldsProvided) {
+      const allergenPolicy = resolveIngredientAllergenUpdate({
+        allergens: ingredient.allergens,
+        allergenInfoStatus: ingredient.allergenInfoStatus,
+        allergenInfoSourceType: ingredient.allergenInfoSourceType,
+        allergenInfoSourceNote: ingredient.allergenInfoSourceNote,
+        allergenReviewedBy: ingredient.allergenReviewedBy?.toString(),
+        allergenReviewedAt: ingredient.allergenReviewedAt
+      }, {
+        allergens,
+        allergenInfoStatus,
+        allergenInfoSourceType,
+        allergenInfoSourceNote,
+        reviewerId: req.auth?.sub ?? "",
+        now: new Date()
+      });
+      if (!allergenPolicy.ok) {
+        return res.status(400).json({ message: "Thông tin allergen hoặc bằng chứng xác nhận không hợp lệ" });
+      }
+      if (allergenPolicy.value.changed) {
+        if (!ingredient.isVerified && !ingredient.restaurantId) {
+          return res.status(400).json({ message: "Nguyên liệu tùy chỉnh thiếu thông tin nhà hàng; không thể cập nhật allergen an toàn" });
+        }
+        affectedMenuItemIds = await invalidateDependentMenuReviews(
+          ingredient._id,
+          ingredient.isVerified ? undefined : ingredient.restaurantId
+        );
+      }
+      ingredient.allergens = allergenPolicy.value.allergens;
+      ingredient.allergenInfoStatus = allergenPolicy.value.allergenInfoStatus;
+      ingredient.allergenInfoSourceType = allergenPolicy.value.allergenInfoSourceType;
+      ingredient.allergenInfoSourceNote = allergenPolicy.value.allergenInfoSourceNote;
+      ingredient.allergenReviewedBy = allergenPolicy.value.allergenReviewedBy as any;
+      ingredient.allergenReviewedAt = allergenPolicy.value.allergenReviewedAt;
+    }
 
     await ingredient.save();
 
-    return res.json(ingredient);
+    if (affectedMenuItemIds.length > 0) {
+      allergenImpact = await recomputeDependentMenuAllergens(affectedMenuItemIds);
+    }
+
+    return res.json({
+      ...ingredient.toObject(),
+      ...(allergenImpact ? { allergenImpact } : {})
+    });
   } catch (error: any) {
     console.error("Error updating ingredient:", error);
     return res.status(500).json({ message: "Lỗi hệ thống khi cập nhật nguyên liệu" });
@@ -403,10 +512,23 @@ router.delete("/:id", requireAuth, async (req: AuthRequest, res) => {
       return res.status(403).json({ message: "Bạn không có quyền thực hiện chức năng này" });
     }
 
+    if (!ingredient.isVerified && !ingredient.restaurantId) {
+      return res.status(400).json({ message: "Nguyên liệu tùy chỉnh thiếu thông tin nhà hàng; không thể xóa allergen an toàn" });
+    }
+    const affectedMenuItemIds = await invalidateDependentMenuReviews(
+      ingredient._id,
+      ingredient.isVerified ? undefined : ingredient.restaurantId
+    );
     await Ingredient.findByIdAndDelete(id);
     await IngredientAlias.deleteMany({ ingredientId: id });
 
-    return res.json({ message: "Đã xóa nguyên liệu thành công" });
+    const allergenImpact = affectedMenuItemIds.length > 0
+      ? await recomputeDependentMenuAllergens(affectedMenuItemIds)
+      : undefined;
+    return res.json({
+      message: "Đã xóa nguyên liệu thành công",
+      ...(allergenImpact ? { allergenImpact } : {})
+    });
   } catch (error: any) {
     console.error("Error deleting ingredient:", error);
     return res.status(500).json({ message: "Lỗi hệ thống khi xóa nguyên liệu" });

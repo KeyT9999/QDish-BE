@@ -4,6 +4,11 @@ function stripLineAllergenDetails<T extends UnknownRecord>(item: T) {
   const {
     allergenInfoStatus: _allergenInfoStatus,
     allergenWarnings: _allergenWarnings,
+    allergenContainsWarnings: _allergenContainsWarnings,
+    allergenMayContainWarnings: _allergenMayContainWarnings,
+    allergenWarningSource: _allergenWarningSource,
+    allergenInformationIncomplete: _allergenInformationIncomplete,
+    allergyDisclosureStatus: _allergyDisclosureStatus,
     reportedAllergies: _reportedAllergies,
     ...publicItem
   } = item;
@@ -11,7 +16,11 @@ function stripLineAllergenDetails<T extends UnknownRecord>(item: T) {
 }
 
 export function sanitizeCustomerOrderForPublicRead<T extends UnknownRecord>(order: T) {
-  const { reportedAllergies: _reportedAllergies, ...publicOrder } = order;
+  const {
+    reportedAllergies: _reportedAllergies,
+    allergyDisclosureStatus: _allergyDisclosureStatus,
+    ...publicOrder
+  } = order;
   return {
     ...publicOrder,
     items: Array.isArray(order.items)

@@ -106,7 +106,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 0,
     sodiumPer100g: 59,
-    allergens: ["fish"],
+    allergens: ["FISH"],
     aliases: [
       { alias: "cá hồi", language: "vi" },
       { alias: "ca hoi", language: "vi" },
@@ -126,7 +126,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 1.1,
     sodiumPer100g: 124,
-    allergens: ["eggs"],
+    allergens: ["EGGS"],
     aliases: [
       { alias: "trứng gà", language: "vi" },
       { alias: "trứng", language: "vi" },
@@ -148,7 +148,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0.3,
     sugarPer100g: 0,
     sodiumPer100g: 7,
-    allergens: ["soy"],
+    allergens: ["SOY"],
     aliases: [
       { alias: "đậu hũ", language: "vi" },
       { alias: "đậu phụ", language: "vi" },
@@ -169,7 +169,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 0,
     sodiumPer100g: 566,
-    allergens: ["shellfish"],
+    allergens: ["SHELLFISH"],
     aliases: [
       { alias: "tôm", language: "vi" },
       { alias: "tom", language: "vi" },
@@ -189,7 +189,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 0,
     sodiumPer100g: 65,
-    allergens: ["fish"],
+    allergens: ["FISH"],
     aliases: [
       { alias: "cá basa", language: "vi" },
       { alias: "ca basa", language: "vi" },
@@ -255,7 +255,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 10.6,
     sugarPer100g: 0,
     sodiumPer100g: 2,
-    allergens: ["gluten"],
+    allergens: ["GLUTEN"],
     aliases: [
       { alias: "yến mạch", language: "vi" },
       { alias: "yen mach", language: "vi" },
@@ -275,7 +275,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 2.7,
     sugarPer100g: 0.3,
     sodiumPer100g: 2,
-    allergens: ["gluten"],
+    allergens: ["GLUTEN"],
     aliases: [
       { alias: "bột mì", language: "vi" },
       { alias: "bot mi", language: "vi" },
@@ -399,7 +399,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 0.1,
     sodiumPer100g: 643,
-    allergens: ["dairy"],
+    allergens: ["DAIRY"],
     aliases: [
       { alias: "bơ", language: "vi" },
       { alias: "bơ lạt", language: "vi" },
@@ -441,7 +441,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 3.3,
     sugarPer100g: 5.9,
     sodiumPer100g: 12,
-    allergens: ["nuts"],
+    allergens: ["TREE_NUTS"],
     aliases: [
       { alias: "hạt điều", language: "vi" },
       { alias: "hat dieu", language: "vi" },
@@ -461,7 +461,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 8.5,
     sugarPer100g: 4,
     sodiumPer100g: 18,
-    allergens: ["nuts"],
+    allergens: ["PEANUT"],
     aliases: [
       { alias: "đậu phộng", language: "vi" },
       { alias: "lạc", language: "vi" },
@@ -629,7 +629,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0.8,
     sugarPer100g: 0.5,
     sodiumPer100g: 5493,
-    allergens: ["soy", "gluten"],
+    allergens: ["SOY", "GLUTEN"],
     aliases: [
       { alias: "nước tương", language: "vi" },
       { alias: "xì dầu", language: "vi" },
@@ -650,7 +650,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 3.6,
     sodiumPer100g: 7851,
-    allergens: ["fish"],
+    allergens: ["FISH"],
     aliases: [
       { alias: "nước mắm", language: "vi" },
       { alias: "nuoc mam", language: "vi" },
@@ -753,7 +753,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 5.1,
     sodiumPer100g: 44,
-    allergens: ["dairy"],
+    allergens: ["DAIRY"],
     aliases: [
       { alias: "sữa tươi", language: "vi" },
       { alias: "sữa", language: "vi" },
@@ -774,7 +774,7 @@ const seedData: SeedIngredientInput[] = [
     fiberPer100g: 0,
     sugarPer100g: 0.5,
     sodiumPer100g: 621,
-    allergens: ["dairy"],
+    allergens: ["DAIRY"],
     aliases: [
       { alias: "phô mai", language: "vi" },
       { alias: "pho mai", language: "vi" },
@@ -813,6 +813,9 @@ async function seed() {
 
       const newIngredient = await Ingredient.create({
         ...ingredientData,
+        allergenInfoStatus: "UNKNOWN",
+        allergenInfoSourceType: "CURATED_REFERENCE_CATALOG",
+        allergenInfoSourceNote: "Mã allergen là ứng viên từ danh mục nguyên liệu tham khảo; chưa xác minh theo nhãn nhà cung cấp của nhà hàng.",
         isVerified: true,
         restaurantId: null,
         source: "verified_manual",

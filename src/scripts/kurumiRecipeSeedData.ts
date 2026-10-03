@@ -30,6 +30,10 @@ export interface KurumiRecipeIngredientDefinition {
   category: KurumiRecipeIngredient["category"];
   defaultUnit: RecipeUnit;
   gramsPerUnit: number;
+  allergenCandidates: string[];
+  allergenInfoStatus: "UNKNOWN";
+  allergenInfoSourceType: "CURATED_MENU_DESCRIPTION";
+  allergenInfoSourceNote: string;
   isVerified: false;
   source: "kurumi-demo-estimate";
 }
@@ -294,15 +298,52 @@ function hasPhrase(text: string, phrase: string): boolean {
 }
 
 function makeDefinition(entry: Pick<VocabularyEntry, "name" | "category" | "unit">): KurumiRecipeIngredientDefinition {
+  const allergenCandidates = KURUMI_DEMO_ALLERGEN_CANDIDATES[entry.name] ?? [];
   return {
     name: entry.name,
     category: entry.category,
     defaultUnit: entry.unit,
     gramsPerUnit: 1,
+    allergenCandidates: [...allergenCandidates],
+    allergenInfoStatus: "UNKNOWN",
+    allergenInfoSourceType: "CURATED_MENU_DESCRIPTION",
+    allergenInfoSourceNote: allergenCandidates.length > 0
+      ? "Ứng viên được ánh xạ từ từ điển nguyên liệu demo; nhà hàng chưa xác minh."
+      : "Từ điển demo chưa có ứng viên allergen cho nguyên liệu này; nhà hàng chưa xác minh.",
     isVerified: false,
     source: "kurumi-demo-estimate"
   };
 }
+
+// Explicit mappings only. These are candidates for conflict warnings, never a
+// final declaration that a dish is safe or complete.
+const KURUMI_DEMO_ALLERGEN_CANDIDATES: Readonly<Record<string, readonly string[]>> = {
+  "Bánh mì nguyên cám": ["GLUTEN"],
+  "Bánh tortilla nguyên cám": ["GLUTEN"],
+  "Bánh mì nướng gia vị": ["GLUTEN"],
+  "Mì dẹt": ["GLUTEN"],
+  "Mì spaghetti": ["GLUTEN"],
+  "Mì pasta": ["GLUTEN"],
+  "Bột mì nguyên cám": ["GLUTEN"],
+  "Bột mì": ["GLUTEN"],
+  "Đậu nành Nhật": ["SOY"],
+  "Tempeh đậu nành": ["SOY"],
+  "Đạm đậu nành thực vật": ["SOY"],
+  "Đậu hũ": ["SOY"],
+  "Nước tương": ["SOY", "GLUTEN"],
+  "Tương miso": ["SOY"],
+  "Hạt điều": ["TREE_NUTS"],
+  "Hạnh nhân": ["TREE_NUTS"],
+  "Hạt óc chó": ["TREE_NUTS"],
+  "Hạt hỗn hợp": ["PEANUT", "TREE_NUTS"],
+  "Đậu phộng": ["PEANUT"],
+  "Hạt mè": ["SESAME"],
+  "Bơ đậu phộng": ["PEANUT"],
+  "Bơ hạt điều": ["TREE_NUTS"],
+  "Sữa hạt điều": ["TREE_NUTS"],
+  "Phô mai hạt điều thuần chay": ["TREE_NUTS"],
+  "Dầu mè": ["SESAME"]
+};
 
 function recipeCategory(item: KurumiMenuItem): string {
   return normalizeWords(item.category);
