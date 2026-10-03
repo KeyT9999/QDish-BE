@@ -1,4 +1,5 @@
 import type { ComputedNutrition } from "./nutritionService.js";
+import { normalizeAllergenInfoStatus } from "./allergenInfoStatusPolicy.js";
 import {
   getPlanLimits,
   resolveOwnerByRestaurant
@@ -50,6 +51,7 @@ interface MenuItemResponseSource {
   missingIngredientCount?: number;
   foodAttributes?: string[];
   allergens?: string[];
+  allergenInfoStatus?: unknown;
 }
 
 export function serializeMenuItemForFeatures<T extends MenuItemResponseSource>(
@@ -75,7 +77,8 @@ export function serializeMenuItemForFeatures<T extends MenuItemResponseSource>(
     foodAttributes: foodAttributesEnabled
       ? item.foodAttributes ?? []
       : [],
-    allergens: item.allergens ?? []
+    allergens: item.allergens ?? [],
+    allergenInfoStatus: normalizeAllergenInfoStatus(item.allergenInfoStatus)
   };
 }
 

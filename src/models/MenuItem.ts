@@ -36,6 +36,7 @@ export interface IMenuItem extends Document {
   nutritionComplete?: boolean;
   missingIngredientCount?: number;
   allergens?: string[];
+  allergenInfoStatus: "UNKNOWN" | "REVIEWED";
   foodAttributes?: string[];
 }
 
@@ -184,6 +185,12 @@ const MenuItemSchema = new Schema<IMenuItem>(
     allergens: {
       type: [String],
       default: []
+    },
+    allergenInfoStatus: {
+      type: String,
+      enum: ["UNKNOWN", "REVIEWED"],
+      default: "UNKNOWN",
+      required: true
     },
     foodAttributes: {
       type: [String],

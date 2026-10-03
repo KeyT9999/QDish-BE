@@ -1,6 +1,5 @@
 import { DINING_ALLERGIES } from "./diningProfileValidation.js";
-
-export type AllergenInfoStatus = "UNKNOWN" | "REVIEWED";
+import type { AllergenInfoStatus } from "./allergenInfoStatusPolicy.js";
 
 export interface OrderAllergenSnapshotInput {
   items: ReadonlyArray<{ menuItemId: string }>;
