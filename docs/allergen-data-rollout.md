@@ -37,7 +37,7 @@ This rollout applies to every restaurant tenant. Allergen declarations are tenan
 
    The command prints ingredient and dish counts by restaurant, unknown/reviewed counts, incomplete recipe coverage, missing recipes, incomplete review evidence, invalid codes, orphan ingredients, and dangling recipe references. Verify the configured `MONGODB_URI` before running it; when unset, the script targets the local `nhahang` database.
 3. Review the report with restaurant owners/operators. Prioritize known customer conflicts, dishes with candidate allergen conflicts, missing recipe references, and records marked reviewed without complete evidence. Do not treat a high number of unknowns as evidence of safety.
-4. The optional safe backfill only writes defaults for missing status/coverage fields and demotes `REVIEWED` records without required review evidence. It does not invent allergen values or promote any record to `REVIEWED`. It is guarded by exact database and host confirmation:
+4. The optional safe backfill only writes defaults for missing status/coverage fields and demotes `REVIEWED` records whose evidence or declarations fail the same validation used by the APIs. It does not invent allergen values or promote any record to `REVIEWED`. It is guarded by exact database and host confirmation:
 
    ```powershell
    npm run audit:allergens -- --apply --confirm-db <database-name> --confirm-host <mongo-host>

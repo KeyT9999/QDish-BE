@@ -14,6 +14,7 @@ const evidence = {
 const noRecipe = { ingredients: [], allergenCoverageStatus: "UNKNOWN" as const, allergenUnverifiedIngredientCount: 0 };
 const completeRecipe = {
   ingredients: [{ ingredientId: "ingredient-1" }],
+  recipeAllergens: ["PEANUT", "GLUTEN"],
   allergenCoverageStatus: "COMPLETE" as const,
   allergenUnverifiedIngredientCount: 0,
   recipeIngredientsReviewed: true
@@ -63,6 +64,20 @@ assert.equal(resolveMenuAllergenReview(completeRecipe, {
   sourceType: "RESTAURANT_RECIPE",
   containsAllergens: ["PEANUT", "NUTS"]
 }).ok, false, "aliases that duplicate a canonical allergen are rejected");
+assert.deepEqual(resolveMenuAllergenReview(completeRecipe, {
+  ...evidence,
+  method: "RECIPE",
+  sourceType: "RESTAURANT_RECIPE",
+  containsAllergens: ["GLUTEN"],
+  mayContainAllergens: []
+}), { ok: false, reason: "RECIPE_ALLERGENS_MISSING" }, "recipe review cannot omit allergens confirmed on recipe ingredients");
+assert.deepEqual(resolveMenuAllergenReview({ ...completeRecipe, recipeAllergens: undefined }, {
+  ...evidence,
+  method: "RECIPE",
+  sourceType: "RESTAURANT_RECIPE",
+  containsAllergens: ["PEANUT", "GLUTEN"],
+  mayContainAllergens: []
+}), { ok: false, reason: "RECIPE_ALLERGENS_MISSING" }, "recipe review fails closed if verified ingredient allergens cannot be derived");
 assert.equal(resolveMenuAllergenReview(noRecipe, {
   ...evidence,
   containsAllergens: ["GLUTEN"],

@@ -4,11 +4,14 @@ import { DishNutritionProfile } from "../models/DishNutritionProfile.js";
 import { Ingredient } from "../models/Ingredient.js";
 import { MenuItem } from "../models/MenuItem.js";
 import { normalizeAllergenCodes } from "../services/allergenSafetyService.js";
+import { hasVerifiedIngredientAllergenEvidence } from "../services/ingredientAllergenPolicy.js";
+import { hasValidMenuAllergenReviewDeclaration } from "../services/menuAllergenReviewService.js";
 import { assertAllergenAuditTarget, parseAllergenAuditOptions } from "../services/allergenCoverageAuditPolicy.js";
 
 const DEFAULT_URI = "mongodb://127.0.0.1:27017/nhahang";
 
 interface AuditRow {
+  _id?: unknown;
   restaurantId: unknown;
   allergens?: unknown;
   allergenInfoStatus?: unknown;
@@ -56,14 +59,19 @@ async function collectAudit() {
   const referencedIngredientIds = new Set<string>();
   const knownIngredientIds = new Set(ingredients.map((ingredient) => String(ingredient._id)));
   const invalidCodes: Array<{ recordType: "ingredient" | "menu"; recordId: string; field: string }> = [];
+  const reviewedIngredientIdsWithoutEvidence: string[] = [];
+  const reviewedMenuItemIdsWithoutEvidence: string[] = [];
 
   for (const row of ingredients as unknown as AuditRow[]) {
     const metrics = tenantMetric(ingredientMetrics, row.restaurantId);
     increment(metrics, "total");
     if (row.allergenInfoStatus === "REVIEWED") increment(metrics, "reviewed");
     else increment(metrics, "unknown");
-    const evidencePresent = Boolean(row.allergenInfoSourceType && row.allergenInfoSourceNote && row.allergenReviewedBy && row.allergenReviewedAt);
-    if (row.allergenInfoStatus === "REVIEWED" && !evidencePresent) increment(metrics, "reviewedWithoutEvidence");
+    const evidencePresent = hasVerifiedIngredientAllergenEvidence(row as unknown as Parameters<typeof hasVerifiedIngredientAllergenEvidence>[0]);
+    if (row.allergenInfoStatus === "REVIEWED" && !evidencePresent) {
+      increment(metrics, "reviewedWithoutEvidence");
+      reviewedIngredientIdsWithoutEvidence.push(String(row._id));
+    }
     const status = candidateListStatus(row.allergens);
     if (status === "MISSING") increment(metrics, "missingAllergenList");
     if (status === "INVALID") {
@@ -80,8 +88,19 @@ async function collectAudit() {
     if (!row.ingredients?.length) increment(metrics, "missingRecipe");
     if (row.allergenCoverageStatus !== "COMPLETE") increment(metrics, "coverageNotComplete");
     if (row.allergenInfoStatus === "UNKNOWN") increment(metrics, "needsReview");
-    const evidencePresent = Boolean(row.allergenReviewMethod && row.allergenReviewSourceType && row.allergenReviewSourceNote && row.allergenReviewedBy && row.allergenReviewedAt);
-    if (row.allergenInfoStatus === "REVIEWED" && !evidencePresent) increment(metrics, "reviewedWithoutEvidence");
+    const evidencePresent = hasValidMenuAllergenReviewDeclaration({
+      method: row.allergenReviewMethod,
+      sourceType: row.allergenReviewSourceType,
+      sourceNote: row.allergenReviewSourceNote,
+      reviewerId: row.allergenReviewedBy,
+      reviewedAt: row.allergenReviewedAt,
+      containsAllergens: row.reviewedAllergens,
+      mayContainAllergens: row.mayContainAllergens
+    });
+    if (row.allergenInfoStatus === "REVIEWED" && !evidencePresent) {
+      increment(metrics, "reviewedWithoutEvidence");
+      reviewedMenuItemIdsWithoutEvidence.push(String(row._id));
+    }
     for (const field of ["allergens", "reviewedAllergens", "mayContainAllergens"] as const) {
       const value = row[field];
       if (value === undefined && field !== "allergens") continue;
@@ -105,11 +124,16 @@ async function collectAudit() {
     danglingRecipeReferenceCount: danglingReferences,
     ingredientsByRestaurant: Object.fromEntries(ingredientMetrics),
     menuItemsByRestaurant: Object.fromEntries(menuMetrics),
-    invalidAllergenLists: invalidCodes
+    invalidAllergenLists: invalidCodes,
+    reviewedIngredientIdsWithoutEvidence,
+    reviewedMenuItemIdsWithoutEvidence
   };
 }
 
-async function applySafeBackfill() {
+async function applySafeBackfill(
+  reviewedIngredientIdsWithoutEvidence: readonly string[],
+  reviewedMenuItemIdsWithoutEvidence: readonly string[]
+) {
   const ingredientStatuses = await Ingredient.updateMany(
     { allergenInfoStatus: { $exists: false } },
     { $set: { allergenInfoStatus: "UNKNOWN" } }
@@ -124,49 +148,40 @@ async function applySafeBackfill() {
       }
     }
   );
-  const incompleteIngredientReviews = await Ingredient.updateMany(
-    {
-      allergenInfoStatus: "REVIEWED",
-      $or: [
-        { allergenInfoSourceType: { $exists: false } },
-        { allergenInfoSourceNote: { $exists: false } },
-        { allergenInfoSourceNote: "" },
-        { allergenReviewedBy: { $exists: false } },
-        { allergenReviewedAt: { $exists: false } }
-      ]
-    },
-    {
-      $set: { allergenInfoStatus: "UNKNOWN" },
-      $unset: { allergenReviewedBy: "", allergenReviewedAt: "" }
-    }
-  );
-  const incompleteMenuReviews = await MenuItem.updateMany(
-    {
-      allergenInfoStatus: "REVIEWED",
-      $or: [
-        { allergenReviewMethod: { $exists: false } },
-        { allergenReviewSourceType: { $exists: false } },
-        { allergenReviewSourceNote: { $exists: false } },
-        { allergenReviewSourceNote: "" },
-        { allergenReviewedBy: { $exists: false } },
-        { allergenReviewedAt: { $exists: false } }
-      ]
-    },
-    {
-      $set: {
-        allergenInfoStatus: "UNKNOWN",
-        reviewedAllergens: [],
-        mayContainAllergens: []
-      },
-      $unset: {
-        allergenReviewMethod: "",
-        allergenReviewSourceType: "",
-        allergenReviewSourceNote: "",
-        allergenReviewedBy: "",
-        allergenReviewedAt: ""
+  let incompleteIngredientReviewCount = 0;
+  let incompleteMenuReviewCount = 0;
+  for (let offset = 0; offset < reviewedIngredientIdsWithoutEvidence.length; offset += 500) {
+    const ids = reviewedIngredientIdsWithoutEvidence.slice(offset, offset + 500).map((id) => new mongoose.Types.ObjectId(id));
+    const result = await Ingredient.updateMany(
+      { _id: { $in: ids }, allergenInfoStatus: "REVIEWED" },
+      {
+        $set: { allergenInfoStatus: "UNKNOWN" },
+        $unset: { allergenInfoSourceType: "", allergenInfoSourceNote: "", allergenReviewedBy: "", allergenReviewedAt: "" }
       }
-    }
-  );
+    );
+    incompleteIngredientReviewCount += result.modifiedCount;
+  }
+  for (let offset = 0; offset < reviewedMenuItemIdsWithoutEvidence.length; offset += 500) {
+    const ids = reviewedMenuItemIdsWithoutEvidence.slice(offset, offset + 500).map((id) => new mongoose.Types.ObjectId(id));
+    const result = await MenuItem.updateMany(
+      { _id: { $in: ids }, allergenInfoStatus: "REVIEWED" },
+      {
+        $set: {
+          allergenInfoStatus: "UNKNOWN",
+          reviewedAllergens: [],
+          mayContainAllergens: []
+        },
+        $unset: {
+          allergenReviewMethod: "",
+          allergenReviewSourceType: "",
+          allergenReviewSourceNote: "",
+          allergenReviewedBy: "",
+          allergenReviewedAt: ""
+        }
+      }
+    );
+    incompleteMenuReviewCount += result.modifiedCount;
+  }
   const profileCoverage = await DishNutritionProfile.updateMany(
     { allergenCoverageStatus: { $exists: false } },
     { $set: { allergenCoverageStatus: "UNKNOWN", allergenUnverifiedIngredientCount: 0 } }
@@ -174,8 +189,8 @@ async function applySafeBackfill() {
   return {
     ingredientStatusesBackfilled: ingredientStatuses.modifiedCount,
     menuStatusesBackfilled: menuStatuses.modifiedCount,
-    ingredientReviewsDemoted: incompleteIngredientReviews.modifiedCount,
-    menuReviewsDemoted: incompleteMenuReviews.modifiedCount,
+    ingredientReviewsDemoted: incompleteIngredientReviewCount,
+    menuReviewsDemoted: incompleteMenuReviewCount,
     nutritionCoverageBackfilled: profileCoverage.modifiedCount
   };
 }
@@ -197,9 +212,13 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
       assertAllergenAuditTarget(options, mongoose.connection.name, hostFromMongoUri(uri));
     }
     console.log(options.apply ? "Allergen coverage audit — GUARDED APPLY" : "Allergen coverage audit — DRY RUN (read-only)");
-    console.log(JSON.stringify(await collectAudit(), null, 2));
+    const before = await collectAudit();
+    console.log(JSON.stringify(before, null, 2));
     if (!options.apply) return;
-    const changes = await applySafeBackfill();
+    const changes = await applySafeBackfill(
+      before.reviewedIngredientIdsWithoutEvidence,
+      before.reviewedMenuItemIdsWithoutEvidence
+    );
     console.log("Safe backfill result:");
     console.log(JSON.stringify(changes, null, 2));
     console.log("Post-backfill audit:");

@@ -78,6 +78,14 @@ assert.equal(hasVerifiedIngredientAllergenEvidence({
 assert.equal(hasVerifiedIngredientAllergenEvidence({
   allergens: ["PEANUT"],
   allergenInfoStatus: "REVIEWED",
+  allergenInfoSourceType: "SUPPLIER_LABEL",
+  allergenInfoSourceNote: "x".repeat(501),
+  allergenReviewedBy: reviewerId,
+  allergenReviewedAt: now
+}), false, "persisted source-note length must follow the write-policy limit");
+assert.equal(hasVerifiedIngredientAllergenEvidence({
+  allergens: ["PEANUT"],
+  allergenInfoStatus: "REVIEWED",
   allergenInfoSourceType: "CURATED_REFERENCE_CATALOG",
   allergenInfoSourceNote: "Candidate value only.",
   allergenReviewedBy: reviewerId,

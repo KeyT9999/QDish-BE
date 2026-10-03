@@ -8,6 +8,7 @@ import { NutritionService } from "../services/nutritionService.js";
 import { resolveAllergenInfoStatusUpdate } from "../services/allergenInfoStatusPolicy.js";
 import { resolveMenuAllergenReview } from "../services/menuAllergenReviewService.js";
 import { hasVerifiedIngredientAllergenEvidence } from "../services/ingredientAllergenPolicy.js";
+import { normalizeAllergenCodes } from "../services/allergenSafetyService.js";
 import {
   assertIngredientsAccessible,
   IngredientAccessDeniedError,
@@ -37,6 +38,7 @@ router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) =
   if (!item) return res.status(404).json({ message: "Không tìm thấy món ăn" });
 
   let recipeIngredientsReviewed = false;
+  let recipeAllergens: string[] | undefined;
   if (req.body?.method === "RECIPE" && item.ingredients.length > 0) {
     try {
       await assertIngredientsAccessible(item.ingredients, restaurantId);
@@ -45,6 +47,10 @@ router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) =
       recipeIngredientsReviewed = ingredients.length === ingredientIds.length
         && ingredients.every((ingredient) => isIngredientAccessible(ingredient, restaurantId)
           && hasVerifiedIngredientAllergenEvidence(ingredient));
+      if (recipeIngredientsReviewed) {
+        recipeAllergens = normalizeAllergenCodes(ingredients.flatMap((ingredient) => ingredient.allergens));
+        if (!recipeAllergens) recipeIngredientsReviewed = false;
+      }
     } catch (error) {
       if (error instanceof IngredientAccessDeniedError) {
         return res.status(400).json({ message: "Công thức tham chiếu nguyên liệu không thuộc nhà hàng", code: "RECIPE_NOT_COMPLETE" });
@@ -54,7 +60,7 @@ router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) =
     }
   }
 
-  const review = resolveMenuAllergenReview({ ...item.toObject(), recipeIngredientsReviewed }, {
+  const review = resolveMenuAllergenReview({ ...item.toObject(), recipeIngredientsReviewed, recipeAllergens }, {
     method: req.body?.method,
     containsAllergens: req.body?.containsAllergens,
     mayContainAllergens: req.body?.mayContainAllergens,
@@ -70,7 +76,8 @@ router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) =
       OVERLAPPING_LISTS: "Một allergen không thể đồng thời nằm trong 'có chứa' và 'có thể chứa'",
       INVALID_SOURCE: "Nguồn xác nhận không phù hợp với cách kiểm tra",
       MISSING_EVIDENCE: "Cần ghi nguồn và nội dung đối chiếu trước khi xác nhận",
-      RECIPE_NOT_COMPLETE: "Công thức còn thiếu hoặc có nguyên liệu chưa xác minh; hãy bổ sung dữ liệu hoặc dùng khai báo thủ công"
+      RECIPE_NOT_COMPLETE: "Công thức còn thiếu hoặc có nguyên liệu chưa xác minh; hãy bổ sung dữ liệu hoặc dùng khai báo thủ công",
+      RECIPE_ALLERGENS_MISSING: "Danh sách “Có chứa” phải bao gồm toàn bộ allergen đã xác minh trong nguyên liệu công thức"
     } as const;
     return res.status(400).json({ message: messages[review.reason], code: review.reason });
   }

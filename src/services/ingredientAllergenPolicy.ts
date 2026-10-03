@@ -72,9 +72,11 @@ function parseReviewedAt(value: Date | string | undefined): Date | undefined {
 }
 
 export function hasVerifiedIngredientAllergenEvidence(record: IngredientAllergenPolicyRecord): boolean {
+  const sourceNoteLength = record.allergenInfoSourceNote?.trim().length ?? 0;
   return record.allergenInfoStatus === "REVIEWED"
     && ALLERGEN_EVIDENCE_SOURCE_TYPES.includes(record.allergenInfoSourceType as AllergenEvidenceSourceType)
-    && Boolean(record.allergenInfoSourceNote?.trim())
+    && sourceNoteLength > 0
+    && sourceNoteLength <= 500
     && Boolean(record.allergenReviewedBy)
     && Boolean(parseReviewedAt(record.allergenReviewedAt))
     && normalizeList(record.allergens ?? []) !== undefined;

@@ -29,8 +29,19 @@ export function hasMenuAllergenReviewEvidence(input: MenuAllergenReviewEvidenceI
   return Boolean(reviewedAt && !Number.isNaN(reviewedAt.getTime()));
 }
 
+export function hasValidMenuAllergenReviewDeclaration(
+  input: MenuAllergenReviewEvidenceInput & { containsAllergens?: unknown; mayContainAllergens?: unknown }
+): boolean {
+  if (!hasMenuAllergenReviewEvidence(input)) return false;
+  const containsAllergens = parseAllergenList(input.containsAllergens);
+  const mayContainAllergens = parseAllergenList(input.mayContainAllergens);
+  return Boolean(containsAllergens && mayContainAllergens)
+    && !containsAllergens?.some((code) => mayContainAllergens?.includes(code));
+}
+
 export interface MenuAllergenReviewRecord {
   ingredients?: readonly unknown[];
+  recipeAllergens?: readonly string[];
   allergenCoverageStatus?: "UNKNOWN" | "INCOMPLETE" | "COMPLETE";
   allergenUnverifiedIngredientCount?: number;
   recipeIngredientsReviewed?: boolean;
@@ -59,7 +70,7 @@ export type MenuAllergenReviewResult =
         reviewedAt: Date;
       };
     }
-  | { ok: false; reason: "INVALID_METHOD" | "INVALID_ALLERGENS" | "OVERLAPPING_LISTS" | "INVALID_SOURCE" | "MISSING_EVIDENCE" | "RECIPE_NOT_COMPLETE" };
+  | { ok: false; reason: "INVALID_METHOD" | "INVALID_ALLERGENS" | "OVERLAPPING_LISTS" | "INVALID_SOURCE" | "MISSING_EVIDENCE" | "RECIPE_NOT_COMPLETE" | "RECIPE_ALLERGENS_MISSING" };
 
 function parseAllergenList(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) return undefined;
@@ -98,6 +109,12 @@ export function resolveMenuAllergenReview(
   if (containsAllergens.some((code) => mayContainAllergens.includes(code))) {
     return { ok: false, reason: "OVERLAPPING_LISTS" };
   }
+  if (input.method === "RECIPE") {
+    const recipeAllergens = parseAllergenList(menu.recipeAllergens);
+    if (!recipeAllergens || recipeAllergens.some((code) => !containsAllergens.includes(code))) {
+      return { ok: false, reason: "RECIPE_ALLERGENS_MISSING" };
+    }
+  }
 
   if (!MENU_ALLERGEN_REVIEW_SOURCE_TYPES.includes(input.sourceType as MenuAllergenReviewSourceType)) {
     return { ok: false, reason: "INVALID_SOURCE" };
@@ -129,4 +146,3 @@ export function resolveMenuAllergenReview(
     }
   };
 }
-

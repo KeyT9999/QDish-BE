@@ -1,7 +1,7 @@
 import type { ComputedNutrition } from "./nutritionService.js";
 import { normalizeAllergenInfoStatus } from "./allergenInfoStatusPolicy.js";
 import { normalizeAllergenCodes } from "./allergenSafetyService.js";
-import { hasMenuAllergenReviewEvidence } from "./menuAllergenReviewService.js";
+import { hasValidMenuAllergenReviewDeclaration } from "./menuAllergenReviewService.js";
 import {
   getPlanLimits,
   resolveOwnerByRestaurant
@@ -83,19 +83,16 @@ export function serializeMenuItemForFeatures<T extends MenuItemResponseSource>(
   const mayContainAllergens = Array.isArray(item.mayContainAllergens)
     ? normalizeAllergenCodes(item.mayContainAllergens)
     : undefined;
-  const declarationIsValid = Array.isArray(item.reviewedAllergens)
-    && Array.isArray(item.mayContainAllergens)
-    && Boolean(reviewedAllergens && mayContainAllergens)
-    && !reviewedAllergens?.some((code) => mayContainAllergens?.includes(code));
-  const hasReviewEvidence = hasMenuAllergenReviewEvidence({
+  const declarationIsValid = hasValidMenuAllergenReviewDeclaration({
     method: item.allergenReviewMethod,
     sourceType: item.allergenReviewSourceType,
     sourceNote: item.allergenReviewSourceNote,
     reviewerId: item.allergenReviewedBy,
-    reviewedAt: item.allergenReviewedAt
+    reviewedAt: item.allergenReviewedAt,
+    containsAllergens: item.reviewedAllergens,
+    mayContainAllergens: item.mayContainAllergens
   });
   const infoStatus = normalizeAllergenInfoStatus(item.allergenInfoStatus) === "REVIEWED"
-    && hasReviewEvidence
     && declarationIsValid
     ? "REVIEWED"
     : "UNKNOWN";

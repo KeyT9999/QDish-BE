@@ -145,12 +145,20 @@ async function run() {
         allergenReviewedAt: new Date()
       }
     });
+    const missingIngredientAllergen = await fetch(`http://127.0.0.1:${address.port}/api/menu/${recipeItem._id}/allergen-review`, {
+      method: "POST",
+      headers: headers(ownerToken),
+      body: JSON.stringify({ ...recipePayload, containsAllergens: [] })
+    });
+    assert.equal(missingIngredientAllergen.status, 400, "recipe review cannot omit allergens confirmed on recipe ingredients");
+    assert.equal((await missingIngredientAllergen.json() as any).code, "RECIPE_ALLERGENS_MISSING");
+
     const completeEvidence = await fetch(`http://127.0.0.1:${address.port}/api/menu/${recipeItem._id}/allergen-review`, {
       method: "POST",
       headers: headers(ownerToken),
       body: JSON.stringify(recipePayload)
     });
-    assert.equal(completeEvidence.status, 200, "recipe review is accepted after every referenced ingredient has source-backed review");
+    assert.equal(completeEvidence.status, 200, "recipe review is accepted after every referenced ingredient has source-backed review and all confirmed allergens are included");
     assert.equal((await completeEvidence.json() as any).allergenInfoStatus, "REVIEWED");
 
     const wrongRestaurantToken = jwt.sign({
