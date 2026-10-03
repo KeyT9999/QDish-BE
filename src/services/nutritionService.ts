@@ -8,6 +8,7 @@ import {
   resolveIngredientForRestaurant
 } from "./ingredientAccessService.js";
 import { normalizeAllergen } from "./allergenSafetyService.js";
+import { invalidateAllergenReview } from "./allergenInfoStatusPolicy.js";
 
 export interface ComputedNutrition {
   calories: number;
@@ -213,6 +214,7 @@ export class NutritionService {
       dish.sugar = 0;
       dish.sodium = 0;
       dish.allergens = [];
+      invalidateAllergenReview(dish);
       dish.foodAttributes = [];
       dish.confidenceScore = 0;
       dish.nutritionCompleteness = 0;
@@ -287,6 +289,7 @@ export class NutritionService {
     dish.sugar = computed.sugar;
     dish.sodium = computed.sodium;
     dish.allergens = computed.allergens;
+    invalidateAllergenReview(dish);
     dish.foodAttributes = computed.attributes;
     dish.confidenceScore = Math.round(computed.nutritionConfidence * 100);
     dish.nutritionCompleteness = computed.completeness;

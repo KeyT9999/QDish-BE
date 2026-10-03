@@ -20,6 +20,8 @@ export interface IOrderItem {
   name: string;
   price: number;
   quantity: number;
+  allergenInfoStatus?: "UNKNOWN" | "REVIEWED";
+  allergenWarnings?: string[];
 }
 
 export interface IOrder extends Document {
@@ -34,6 +36,7 @@ export interface IOrder extends Document {
   totalAmount: number;
   status: OrderStatus;
   note?: string;
+  reportedAllergies?: string[];
   customerName?: string;
   paymentMethod?: PaymentMethod;
   confirmedBy?: Types.ObjectId;
@@ -49,7 +52,9 @@ const OrderItemSchema = new Schema<IOrderItem>({
   menuItemId: { type: String, required: true },
   name: { type: String, required: true },
   price: { type: Number, required: true },
-  quantity: { type: Number, required: true, min: 1 }
+  quantity: { type: Number, required: true, min: 1 },
+  allergenInfoStatus: { type: String, enum: ["UNKNOWN", "REVIEWED"], default: "UNKNOWN" },
+  allergenWarnings: { type: [String], default: [] }
 });
 
 const OrderSideEffectTaskSchema = new Schema({
@@ -133,6 +138,11 @@ const OrderSchema = new Schema<IOrder>(
     note: {
       type: String,
       trim: true
+    },
+    reportedAllergies: {
+      type: [String],
+      enum: ["GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH"],
+      default: undefined
     },
     customerName: {
       type: String,

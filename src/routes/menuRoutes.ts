@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import { MenuItem } from "../models/MenuItem.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
 import { NutritionService } from "../services/nutritionService.js";
+import { resolveAllergenInfoStatusUpdate } from "../services/allergenInfoStatusPolicy.js";
 import {
   assertIngredientsAccessible,
   IngredientAccessDeniedError
@@ -171,7 +172,7 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
 
   const { 
     name, description, price, category, categoryId, imageUrl, available,
-    ingredients, servingCount, servingSizeGrams, cookingMethod
+    ingredients, servingCount, servingSizeGrams, cookingMethod, allergenInfoStatus
   } = req.body;
 
   const update: any = {};
@@ -214,6 +215,14 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     ingredients !== undefined ||
     servingCount !== undefined ||
     cookingMethod !== undefined;
+
+  const allergenStatusUpdate = resolveAllergenInfoStatusUpdate(recipeChanged, allergenInfoStatus);
+  if (!allergenStatusUpdate.ok) {
+    return res.status(400).json({ message: "Trạng thái xác nhận dị ứng không hợp lệ" });
+  }
+  if (allergenStatusUpdate.status !== undefined) {
+    update.allergenInfoStatus = allergenStatusUpdate.status;
+  }
 
   if (Array.isArray(ingredients)) {
     try {

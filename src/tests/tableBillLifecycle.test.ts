@@ -196,6 +196,48 @@ async function testOrdersAccumulateIntoOneBill() {
   assert.equal(order2.billId.toString(), ids.bill.toString());
 }
 
+async function testAllergenSnapshotsStayDistinctWhenBillLinesAreMerged() {
+  const { deps, session } = makeState();
+  const bill = await resolveActiveBillForSession(session, deps as any);
+  const orderSnapshots = [
+    { allergenInfoStatus: "REVIEWED", allergenWarnings: ["NUTS"] },
+    { allergenInfoStatus: "REVIEWED", allergenWarnings: [] },
+    { allergenInfoStatus: "UNKNOWN", allergenWarnings: [], reportedAllergies: ["NUTS"] },
+    { allergenInfoStatus: "UNKNOWN", allergenWarnings: [], reportedAllergies: ["FISH"] },
+    { allergenInfoStatus: "REVIEWED", allergenWarnings: ["NUTS"] }
+  ];
+
+  for (const [index, snapshot] of orderSnapshots.entries()) {
+    const { reportedAllergies, ...itemSnapshot } = snapshot;
+    const order: any = makeDoc({
+      _id: asObjectId(String(20 + index)),
+      restaurantId: ids.restaurant,
+      tableSessionId: ids.session,
+      tableNumber: "15",
+      items: [{ menuItemId: "same-dish", name: "Món giống nhau", price: 100, quantity: 1, ...itemSnapshot }],
+      ...(reportedAllergies ? { reportedAllergies } : {}),
+      note: "Ít cay",
+      totalAmount: 100,
+      status: OrderStatus.PENDING
+    });
+    await appendOrderToBill(order, session, deps as any);
+  }
+
+  assert.equal(bill.itemsSnapshot.length, 4);
+  assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenInfoStatus), [
+    "REVIEWED", "REVIEWED", "UNKNOWN", "UNKNOWN"
+  ]);
+  assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenWarnings), [
+    ["NUTS"], [], [], []
+  ]);
+  assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.reportedAllergies), [
+    undefined, undefined, ["NUTS"], ["FISH"]
+  ]);
+  assert.equal(bill.itemsSnapshot[0].quantity, 2, "identical warning snapshots should still aggregate");
+  assert.equal(bill.totalItems, 5);
+  assert.equal(bill.subtotal, 500);
+}
+
 async function testPayBillClosesSessionAndReleasesTable() {
   const { deps, orders, session, table } = makeState();
   const bill = await resolveActiveBillForSession(session, deps as any);
@@ -479,6 +521,7 @@ async function testBillListFiltersIncludeOperationalAndHistoricalStatuses() {
 
 async function run() {
   await testOrdersAccumulateIntoOneBill();
+  await testAllergenSnapshotsStayDistinctWhenBillLinesAreMerged();
   await testPayBillClosesSessionAndReleasesTable();
   await testCashPaymentRejectsInsufficientReceivedAmount();
   await testBankTransferPaymentDoesNotRequireCashReceived();

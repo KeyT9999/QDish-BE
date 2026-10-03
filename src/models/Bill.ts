@@ -21,6 +21,9 @@ export interface IBillItemSnapshot {
   unitPrice: number;
   totalPrice: number;
   notes?: string;
+  allergenInfoStatus?: "UNKNOWN" | "REVIEWED";
+  allergenWarnings?: string[];
+  reportedAllergies?: string[];
 }
 
 export interface IBill extends Document {
@@ -53,7 +56,14 @@ const BillItemSnapshotSchema = new Schema<IBillItemSnapshot>(
     quantity: { type: Number, required: true, min: 0 },
     unitPrice: { type: Number, required: true, min: 0 },
     totalPrice: { type: Number, required: true, min: 0 },
-    notes: { type: String, trim: true }
+    notes: { type: String, trim: true },
+    allergenInfoStatus: { type: String, enum: ["UNKNOWN", "REVIEWED"], default: "UNKNOWN" },
+    allergenWarnings: { type: [String], default: [] },
+    reportedAllergies: {
+      type: [String],
+      enum: ["GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH"],
+      default: undefined
+    }
   },
   { _id: false }
 );

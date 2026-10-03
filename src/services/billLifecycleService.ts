@@ -4,6 +4,7 @@ import { Bill, BillPaymentMethod, BillStatus, generateBillCode } from "../models
 import { Order, OrderStatus, PaymentMethod } from "../models/Order.js";
 import { Table, TableStatus } from "../models/Table.js";
 import { TableSession, TableSessionStatus } from "../models/TableSession.js";
+import { DINING_ALLERGIES } from "./diningProfileValidation.js";
 
 export const ACTIVE_BILL_STATUSES = [
   BillStatus.UNPAID,
@@ -368,11 +369,21 @@ export const appendOrderToBill = async (
       const unitPrice = Number(item.price) || 0;
       const quantity = Number(item.quantity) || 0;
       const notes = order.note || undefined;
+      const allergenInfoStatus = item.allergenInfoStatus === "REVIEWED" ? "REVIEWED" : "UNKNOWN";
+      const allergenWarnings = allergenInfoStatus === "REVIEWED"
+        ? normalizeAllergyCodes(item.allergenWarnings)
+        : [];
+      const reportedAllergies = allergenInfoStatus === "UNKNOWN"
+        ? normalizeAllergyCodes(order.reportedAllergies)
+        : [];
       const existing = bill.itemsSnapshot.find((snapshot: any) => (
         snapshot.menuItemId === item.menuItemId &&
         snapshot.name === item.name &&
         Number(snapshot.unitPrice) === unitPrice &&
-        (snapshot.notes || undefined) === notes
+        (snapshot.notes || undefined) === notes &&
+        (snapshot.allergenInfoStatus === "REVIEWED" ? "REVIEWED" : "UNKNOWN") === allergenInfoStatus &&
+        JSON.stringify(normalizeAllergyCodes(snapshot.allergenWarnings)) === JSON.stringify(allergenWarnings) &&
+        JSON.stringify(normalizeAllergyCodes(snapshot.reportedAllergies)) === JSON.stringify(reportedAllergies)
       ));
 
       if (existing) {
@@ -385,7 +396,10 @@ export const appendOrderToBill = async (
           quantity,
           unitPrice,
           totalPrice: unitPrice * quantity,
-          notes
+          notes,
+          allergenInfoStatus,
+          allergenWarnings,
+          ...(reportedAllergies.length > 0 ? { reportedAllergies } : {})
         });
       }
     }
@@ -410,6 +424,14 @@ export const appendOrderToBill = async (
   await bill.save();
   return bill;
 };
+
+function normalizeAllergyCodes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const submitted = new Set(value.filter((code): code is string => typeof code === "string")
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => DINING_ALLERGIES.includes(code as typeof DINING_ALLERGIES[number])));
+  return DINING_ALLERGIES.filter((code) => submitted.has(code));
+}
 
 export const payBill = async (
   input: {
