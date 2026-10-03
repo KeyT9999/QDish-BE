@@ -20,6 +20,15 @@ export interface OrderAllergenSnapshot {
   allergenWarnings: string[];
 }
 
+export interface OrderItemSnapshotInput {
+  menuItemId: string;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+export type PersistedOrderItem = OrderItemSnapshotInput & OrderAllergenSnapshot;
+
 const allowedAllergies = new Set<string>(DINING_ALLERGIES);
 
 function normalizeAllergen(value: string): string {
@@ -92,4 +101,30 @@ export function buildOrderAllergenSnapshots(
   }
 
   return snapshots;
+}
+
+export function snapshotOrderItems<T extends OrderItemSnapshotInput>(
+  items: readonly T[],
+  snapshots: ReadonlyMap<string, OrderAllergenSnapshot>
+): PersistedOrderItem[] {
+  return items.map(({ menuItemId, name, price, quantity }) => ({
+    menuItemId,
+    name,
+    price,
+    quantity,
+    ...(snapshots.get(menuItemId) ?? {
+      allergenInfoStatus: "UNKNOWN" as const,
+      allergenWarnings: []
+    })
+  }));
+}
+
+export function resolveOrderReportedAllergies(
+  items: readonly Pick<PersistedOrderItem, "allergenInfoStatus">[],
+  reportedAllergies: readonly string[]
+): string[] | undefined {
+  if (reportedAllergies.length === 0 || !items.some((item) => item.allergenInfoStatus === "UNKNOWN")) {
+    return undefined;
+  }
+  return [...reportedAllergies];
 }

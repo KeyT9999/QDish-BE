@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   buildOrderAllergenSnapshots,
-  parseReportedAllergies
+  parseReportedAllergies,
+  resolveOrderReportedAllergies,
+  snapshotOrderItems
 } from "../services/orderAllergenSnapshotService.js";
 
 const validAllergies = ["GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH"];
@@ -52,5 +54,29 @@ assert.deepEqual(snapshots.get("deleted-dish"), {
   allergenWarnings: []
 });
 assert.equal(snapshots.size, 4, "duplicate order lines should share the item snapshot");
+
+const submittedItems = [{
+  menuItemId: "nuts-dish",
+  name: "Món hạt",
+  price: 100,
+  quantity: 1,
+  allergenInfoStatus: "UNKNOWN",
+  allergenWarnings: ["FISH"],
+  allergens: ["FISH"]
+}];
+const persistedItems = snapshotOrderItems(submittedItems, snapshots);
+assert.deepEqual(persistedItems, [{
+  menuItemId: "nuts-dish",
+  name: "Món hạt",
+  price: 100,
+  quantity: 1,
+  allergenInfoStatus: "REVIEWED",
+  allergenWarnings: ["NUTS"]
+}]);
+assert.deepEqual(resolveOrderReportedAllergies(persistedItems, ["NUTS"]), undefined);
+assert.deepEqual(resolveOrderReportedAllergies([
+  { allergenInfoStatus: "UNKNOWN" }
+], ["NUTS"]), ["NUTS"]);
+assert.deepEqual(resolveOrderReportedAllergies(persistedItems, []), undefined);
 
 console.log("order allergen snapshot tests passed");

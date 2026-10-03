@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { performance } from "node:perf_hooks";
 import { Order, OrderStatus, type IOrder } from "../models/Order.js";
+import { MenuItem } from "../models/MenuItem.js";
 import { Bill } from "../models/Bill.js";
 import mongoose from "mongoose";
 import { Restaurant, RestaurantStatus } from "../models/Restaurant.js";
@@ -30,6 +31,13 @@ import {
 import { OwnerRestaurantQuotaLeaseError } from "../services/ownerRestaurantQuotaLeaseService.js";
 import { RestaurantNotAcceptingOrdersError, withActiveRestaurantOrderWrite } from "../services/restaurantOrderWriteService.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
+import {
+  buildOrderAllergenSnapshots,
+  parseReportedAllergies,
+  resolveOrderReportedAllergies,
+  snapshotOrderItems
+} from "../services/orderAllergenSnapshotService.js";
+import { sanitizeCustomerOrderForPublicRead } from "../services/customerOrderSerialization.js";
 import {
   assertRestaurantOrderChangesAccess,
   getOrderChanges,
@@ -100,7 +108,8 @@ router.post("/", async (req, res) => {
     customerPhone,
     marketingConsent,
     consentVersion,
-    tableSessionId
+    tableSessionId,
+    reportedAllergies
   } = req.body as {
     restaurantId?: string;
     tableNumber?: string;
@@ -111,10 +120,16 @@ router.post("/", async (req, res) => {
     marketingConsent?: boolean;
     consentVersion?: string;
     tableSessionId?: string;
+    reportedAllergies?: unknown;
   };
 
-  if (!restaurantId || !tableNumber || !items || items.length === 0) {
+  if (!restaurantId || !tableNumber || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ message: "Thiếu thông tin đơn hàng" });
+  }
+
+  const parsedReportedAllergies = parseReportedAllergies(reportedAllergies);
+  if (!parsedReportedAllergies.ok) {
+    return res.status(400).json({ message: "Danh sách dị ứng không hợp lệ" });
   }
 
   if (!mongoose.isValidObjectId(restaurantId)) {
@@ -135,8 +150,11 @@ router.post("/", async (req, res) => {
   }
 
   const hasInvalidItem = items.some(item =>
+    !item ||
+    typeof item.menuItemId !== "string" ||
     !item.menuItemId ||
-    !item.name?.trim() ||
+    typeof item.name !== "string" ||
+    !item.name.trim() ||
     typeof item.price !== "number" ||
     item.price < 0 ||
     typeof item.quantity !== "number" ||
@@ -288,6 +306,32 @@ router.post("/", async (req, res) => {
         throw new TableSessionLifecycleError(400, "Phiên bàn đã kết thúc. Vui lòng quét lại mã QR.");
       }
 
+      const menuItemIds = [...new Set(items.map((item) => item.menuItemId))]
+        .filter((menuItemId) => mongoose.isValidObjectId(menuItemId))
+        .map((menuItemId) => new mongoose.Types.ObjectId(menuItemId));
+      const menuItems = menuItemIds.length > 0
+        ? await MenuItem.find({
+            _id: { $in: menuItemIds },
+            restaurantId: new mongoose.Types.ObjectId(restaurantId)
+          })
+          .select("_id allergens allergenInfoStatus")
+          .lean()
+        : [];
+      const allergenSnapshots = buildOrderAllergenSnapshots({
+        items,
+        menuItems: menuItems.map((item) => ({
+          id: item._id.toString(),
+          allergens: item.allergens,
+          allergenInfoStatus: item.allergenInfoStatus
+        })),
+        reportedAllergies: parsedReportedAllergies.allergies
+      });
+      const persistedItems = snapshotOrderItems(items, allergenSnapshots);
+      const orderReportedAllergies = resolveOrderReportedAllergies(
+        persistedItems,
+        parsedReportedAllergies.allergies
+      );
+
       // Bill creation must share the archive lease with the order write. Otherwise
       // a stale session request can create an unpaid bill after archive finalizes.
       let stageStartedAt = performance.now();
@@ -302,10 +346,11 @@ router.post("/", async (req, res) => {
         sessionCode: session ? session.sessionCode : undefined,
         billCode: bill.billCode,
         billStatus: bill.status,
-        items,
+        items: persistedItems,
         totalAmount,
         status: OrderStatus.PENDING,
         note,
+        ...(orderReportedAllergies ? { reportedAllergies: orderReportedAllergies } : {}),
         customerName: normalizedCustomerName || undefined,
         sideEffects: {
           status: "pending",
@@ -390,7 +435,7 @@ router.get("/", async (req, res) => {
       sessionId
     });
 
-    return res.json(orders);
+    return res.json(orders.map((order: Record<string, any>) => sanitizeCustomerOrderForPublicRead(order)));
   } catch (error) {
     if (error instanceof TableSessionLifecycleError) {
       return res.status(error.statusCode).json({ message: error.message });

@@ -16,6 +16,7 @@ import {
   listBillsForRestaurant,
   payBill
 } from "../services/billLifecycleService.js";
+import { sanitizeCustomerBillForPublicRead } from "../services/customerOrderSerialization.js";
 
 const router = Router();
 
@@ -100,7 +101,7 @@ router.get("/current", async (req, res) => {
     }
 
     const result = await getCurrentBillForCustomer({ restaurantId, tableNumber, sessionId });
-    return res.json(result);
+    return res.json(sanitizeCustomerBillForPublicRead(result));
   } catch (error) {
     const handled = handleBillError(res, error);
     if (handled) return handled;
