@@ -16,6 +16,12 @@ assert.equal(plan.recipes.length, 181, "every official menu item must receive a 
 assert.ok(plan.recipes.filter((recipe) => recipe.basis === "menu-description").length > 80);
 assert.ok(plan.recipes.some((recipe) => recipe.basis === "menu-name-inference"));
 assert.ok(plan.ingredients.length > 30, "the plan should contain reusable ingredient definitions");
+const ingredientsByName = new Map(plan.ingredients.map((ingredient) => [ingredient.name, ingredient]));
+assert.deepEqual(ingredientsByName.get("Hạt óc chó")?.allergenCandidates, ["TREE_NUTS"]);
+assert.deepEqual(ingredientsByName.get("Đậu phộng")?.allergenCandidates, ["PEANUT"]);
+assert.deepEqual(ingredientsByName.get("Bột mì")?.allergenCandidates, ["GLUTEN"]);
+assert.deepEqual(ingredientsByName.get("Đậu hũ")?.allergenCandidates, ["SOY"]);
+assert.deepEqual(ingredientsByName.get("Hạt mè")?.allergenCandidates, ["SESAME"]);
 
 const recipesByName = new Map(plan.recipes.map((recipe) => [recipe.name, recipe]));
 const pancake = recipesByName.get("Bánh Kếp Yến Mạch Dừa");
@@ -60,6 +66,8 @@ const bannedAnimalTerms = /\b(chicken|beef|pork|fish|salmon|shrimp|egg|milk|butt
 for (const ingredient of plan.ingredients) {
   assert.equal(bannedAnimalTerms.test(ingredient.name), false, `animal-derived ingredient: ${ingredient.name}`);
   assert.equal(ingredient.isVerified, false, "demo ingredients must never enter the verified catalog");
+  assert.equal(ingredient.allergenInfoStatus, "UNKNOWN", "seeded candidate allergens must remain unverified");
+  assert.equal(ingredient.allergenInfoSourceType, "CURATED_MENU_DESCRIPTION");
   assert.ok(ingredient.source.includes("kurumi-demo-estimate"));
   assert.equal("caloriesPer100g" in ingredient, false, "do not invent nutrient facts");
 }

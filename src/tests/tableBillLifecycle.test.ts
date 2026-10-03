@@ -200,11 +200,35 @@ async function testAllergenSnapshotsStayDistinctWhenBillLinesAreMerged() {
   const { deps, session } = makeState();
   const bill = await resolveActiveBillForSession(session, deps as any);
   const orderSnapshots = [
-    { allergenInfoStatus: "REVIEWED", allergenWarnings: ["NUTS"] },
-    { allergenInfoStatus: "REVIEWED", allergenWarnings: [] },
+    {
+      allergenInfoStatus: "REVIEWED",
+      allergenWarnings: ["NUTS"],
+      allergenContainsWarnings: ["NUTS"],
+      allergenMayContainWarnings: [],
+      allergenWarningSource: "CONTAINS"
+    },
+    {
+      allergenInfoStatus: "REVIEWED",
+      allergenWarnings: [],
+      allergenContainsWarnings: [],
+      allergenMayContainWarnings: []
+    },
     { allergenInfoStatus: "UNKNOWN", allergenWarnings: [], reportedAllergies: ["NUTS"] },
     { allergenInfoStatus: "UNKNOWN", allergenWarnings: [], reportedAllergies: ["FISH"] },
-    { allergenInfoStatus: "REVIEWED", allergenWarnings: ["NUTS"] }
+    {
+      allergenInfoStatus: "REVIEWED",
+      allergenWarnings: ["NUTS"],
+      allergenContainsWarnings: ["NUTS"],
+      allergenMayContainWarnings: [],
+      allergenWarningSource: "CONTAINS"
+    },
+    {
+      allergenInfoStatus: "REVIEWED",
+      allergenWarnings: ["SESAME"],
+      allergenContainsWarnings: [],
+      allergenMayContainWarnings: ["SESAME"],
+      allergenWarningSource: "MAY_CONTAIN"
+    }
   ];
 
   for (const [index, snapshot] of orderSnapshots.entries()) {
@@ -223,19 +247,28 @@ async function testAllergenSnapshotsStayDistinctWhenBillLinesAreMerged() {
     await appendOrderToBill(order, session, deps as any);
   }
 
-  assert.equal(bill.itemsSnapshot.length, 4);
+  assert.equal(bill.itemsSnapshot.length, 5);
   assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenInfoStatus), [
-    "REVIEWED", "REVIEWED", "UNKNOWN", "UNKNOWN"
+    "REVIEWED", "REVIEWED", "UNKNOWN", "UNKNOWN", "REVIEWED"
   ]);
   assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenWarnings), [
-    ["NUTS"], [], [], []
+    ["PEANUT", "TREE_NUTS"], [], [], [], ["SESAME"]
+  ]);
+  assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenContainsWarnings), [
+    ["PEANUT", "TREE_NUTS"], [], [], [], []
+  ]);
+  assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenMayContainWarnings), [
+    [], [], [], [], ["SESAME"]
+  ]);
+  assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.allergenWarningSource), [
+    "CONTAINS", undefined, undefined, undefined, "MAY_CONTAIN"
   ]);
   assert.deepEqual(bill.itemsSnapshot.map((item: any) => item.reportedAllergies), [
-    undefined, undefined, ["NUTS"], ["FISH"]
+    undefined, undefined, ["PEANUT", "TREE_NUTS"], ["FISH"], undefined
   ]);
   assert.equal(bill.itemsSnapshot[0].quantity, 2, "identical warning snapshots should still aggregate");
-  assert.equal(bill.totalItems, 5);
-  assert.equal(bill.subtotal, 500);
+  assert.equal(bill.totalItems, 6);
+  assert.equal(bill.subtotal, 600);
 }
 
 async function testPayBillClosesSessionAndReleasesTable() {

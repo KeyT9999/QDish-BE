@@ -33,11 +33,13 @@ import { RestaurantNotAcceptingOrdersError, withActiveRestaurantOrderWrite } fro
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import {
   buildOrderAllergenSnapshots,
+  parseAllergyDisclosureStatus,
   parseReportedAllergies,
   resolveOrderReportedAllergies,
   snapshotOrderItems
 } from "../services/orderAllergenSnapshotService.js";
 import { sanitizeCustomerOrderForPublicRead } from "../services/customerOrderSerialization.js";
+import { hasMenuAllergenReviewEvidence } from "../services/menuAllergenReviewService.js";
 import {
   assertRestaurantOrderChangesAccess,
   getOrderChanges,
@@ -109,7 +111,8 @@ router.post("/", async (req, res) => {
     marketingConsent,
     consentVersion,
     tableSessionId,
-    reportedAllergies
+    reportedAllergies,
+    allergyDisclosureStatus
   } = req.body as {
     restaurantId?: string;
     tableNumber?: string;
@@ -121,6 +124,7 @@ router.post("/", async (req, res) => {
     consentVersion?: string;
     tableSessionId?: string;
     reportedAllergies?: unknown;
+    allergyDisclosureStatus?: unknown;
   };
 
   if (!restaurantId || !tableNumber || !Array.isArray(items) || items.length === 0) {
@@ -130,6 +134,13 @@ router.post("/", async (req, res) => {
   const parsedReportedAllergies = parseReportedAllergies(reportedAllergies);
   if (!parsedReportedAllergies.ok) {
     return res.status(400).json({ message: "Danh sách dị ứng không hợp lệ" });
+  }
+  const parsedDisclosureStatus = parseAllergyDisclosureStatus(
+    allergyDisclosureStatus,
+    parsedReportedAllergies.allergies
+  );
+  if (!parsedDisclosureStatus.ok) {
+    return res.status(400).json({ message: "Trạng thái khai báo dị ứng không khớp danh sách dị ứng" });
   }
 
   if (!mongoose.isValidObjectId(restaurantId)) {
@@ -314,7 +325,7 @@ router.post("/", async (req, res) => {
             _id: { $in: menuItemIds },
             restaurantId: new mongoose.Types.ObjectId(restaurantId)
           })
-          .select("_id allergens allergenInfoStatus")
+          .select("_id allergens reviewedAllergens mayContainAllergens allergenInfoStatus allergenReviewMethod allergenReviewSourceType allergenReviewSourceNote allergenReviewedBy allergenReviewedAt")
           .lean()
         : [];
       const allergenSnapshots = buildOrderAllergenSnapshots({
@@ -322,7 +333,16 @@ router.post("/", async (req, res) => {
         menuItems: menuItems.map((item) => ({
           id: item._id.toString(),
           allergens: item.allergens,
-          allergenInfoStatus: item.allergenInfoStatus
+          reviewedAllergens: item.reviewedAllergens,
+          mayContainAllergens: item.mayContainAllergens,
+          allergenInfoStatus: item.allergenInfoStatus,
+          hasReviewEvidence: hasMenuAllergenReviewEvidence({
+            method: item.allergenReviewMethod,
+            sourceType: item.allergenReviewSourceType,
+            sourceNote: item.allergenReviewSourceNote,
+            reviewerId: item.allergenReviewedBy,
+            reviewedAt: item.allergenReviewedAt
+          })
         })),
         reportedAllergies: parsedReportedAllergies.allergies
       });
@@ -351,6 +371,7 @@ router.post("/", async (req, res) => {
         status: OrderStatus.PENDING,
         note,
         ...(orderReportedAllergies ? { reportedAllergies: orderReportedAllergies } : {}),
+        allergyDisclosureStatus: parsedDisclosureStatus.value,
         customerName: normalizedCustomerName || undefined,
         sideEffects: {
           status: "pending",

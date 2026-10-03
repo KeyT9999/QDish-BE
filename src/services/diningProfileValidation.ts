@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 import type { BatchFitScoreInput } from "./batchFitScoreService.js";
+import { ALLERGEN_CODES, normalizeAllergenCodes } from "./allergenSafetyService.js";
 
 export const DINING_GOALS = ["MUSCLE_GAIN", "ENERGY_BOOST", "LIGHT_MEAL", "COMFORT", "BALANCED", "WEIGHT_LOSS", "MAINTENANCE", "GENERAL_HEALTH"] as const;
 export const DINING_PREFERENCES = ["VEGAN", "VEGETARIAN", "LOW_CARB", "HIGH_PROTEIN", "KETO", "GLUTEN_FREE", "LOW_FAT", "SUGAR_FREE"] as const;
-export const DINING_ALLERGIES = ["GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH"] as const;
+// Keep NUTS as a legacy request value; it expands to PEANUT + TREE_NUTS at the boundary.
+export const DINING_ALLERGIES = [...ALLERGEN_CODES, "NUTS"] as const;
 
 export interface DiningProfileSnapshot {
   goals: string[];
@@ -58,14 +60,18 @@ function parseDiningProfile(value: unknown): DiningProfileSnapshot | undefined {
     !isBoundedUniqueAllowedStringList(value.goals, DINING_GOALS)
     || !isBoundedUniqueAllowedStringList(value.preferences, DINING_PREFERENCES)
     || !isBoundedUniqueAllowedStringList(value.allergies, DINING_ALLERGIES)
+    || new Set((value.allergies as string[]).map((allergy) => allergy.trim().toUpperCase())).size !== (value.allergies as string[]).length
   ) {
     return undefined;
   }
 
+  const allergies = normalizeAllergenCodes(value.allergies as string[]);
+  if (!allergies) return undefined;
+
   return {
     goals: value.goals,
     preferences: value.preferences,
-    allergies: value.allergies,
+    allergies,
   };
 }
 

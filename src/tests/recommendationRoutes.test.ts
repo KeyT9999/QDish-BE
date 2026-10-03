@@ -103,7 +103,10 @@ async function testInlineProfileAndContextReachEngine() {
   assert.deepEqual(calls, [
     "owner",
     "plan",
-    JSON.stringify({ profile: userProfile, context }),
+    JSON.stringify({
+      profile: { ...userProfile, allergies: ["PEANUT", "TREE_NUTS"] },
+      context
+    }),
   ]);
 }
 

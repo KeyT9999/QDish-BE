@@ -12,6 +12,8 @@ export interface IDishNutritionProfile extends Document {
   sodium: number; // in mg
   attributes: string[];
   allergens: string[];
+  allergenCoverageStatus: "UNKNOWN" | "INCOMPLETE" | "COMPLETE";
+  allergenUnverifiedIngredientCount: number;
   nutritionConfidence: number;
   completeness: number;
   isComplete: boolean;
@@ -36,6 +38,8 @@ const DishNutritionProfileSchema = new Schema<IDishNutritionProfile>(
     sodium: { type: Number, default: 0, min: 0 },
     attributes: { type: [String], default: [] },
     allergens: { type: [String], default: [] },
+    allergenCoverageStatus: { type: String, enum: ["UNKNOWN", "INCOMPLETE", "COMPLETE"], default: "UNKNOWN" },
+    allergenUnverifiedIngredientCount: { type: Number, default: 0, min: 0 },
     nutritionConfidence: { type: Number, default: 0, min: 0, max: 1.0 },
     completeness: { type: Number, default: 0, min: 0, max: 1.0 },
     isComplete: { type: Boolean, default: false },

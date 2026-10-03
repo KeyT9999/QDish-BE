@@ -82,6 +82,10 @@ interface IngredientRecord {
   restaurantId: Types.ObjectId | null;
   isVerified: boolean;
   source: string;
+  allergens?: string[];
+  allergenInfoStatus?: "UNKNOWN" | "REVIEWED";
+  allergenInfoSourceType?: string;
+  allergenInfoSourceNote?: string;
   [key: string]: unknown;
 }
 
@@ -100,11 +104,17 @@ interface DemoIngredientCategoryUpdate {
   category: string;
 }
 
+interface DemoIngredientAllergenUpdate {
+  id: Types.ObjectId;
+  allergenCandidates: string[];
+  allergenInfoSourceNote: string;
+}
+
 function printHelp(): void {
   console.log([
     "Seed estimated, one-serving vegan demo recipes for the official KURUMI menu.",
     "Ingredient names follow KURUMI's public menu where available; all quantities are estimates.",
-    "The script does not invent nutrition or allergen facts and preserves recipes already entered.",
+    "The script only adds explicit ingredient allergen candidates; all remain UNKNOWN and need restaurant review.",
     "",
     "Usage:",
     "  npm run seed:kurumi-recipes -- --username Anvatcuti2",
@@ -280,13 +290,14 @@ async function resolveDemoIngredients(
   idsByName: Map<string, Types.ObjectId>;
   toCreate: KurumiRecipeIngredientDefinition[];
   toUpdateCategory: DemoIngredientCategoryUpdate[];
+  toUpdateAllergenCandidates: DemoIngredientAllergenUpdate[];
 }> {
   const keys = definitions.map((definition) => ({
     definition,
     slug: kurumiDemoIngredientSlug(String(restaurantId), definition.name)
   }));
   const existing = await Ingredient.find({ slug: { $in: keys.map((key) => key.slug) } })
-    .select("_id slug name category defaultUnit gramsPerUnit restaurantId isVerified source caloriesPer100g proteinPer100g carbPer100g fatPer100g fiberPer100g sugarPer100g sodiumPer100g")
+    .select("_id slug name category defaultUnit gramsPerUnit restaurantId isVerified source allergens allergenInfoStatus allergenInfoSourceType allergenInfoSourceNote caloriesPer100g proteinPer100g carbPer100g fatPer100g fiberPer100g sugarPer100g sodiumPer100g")
     .lean() as unknown as IngredientRecord[];
   const existingBySlug = new Map<string, IngredientRecord>();
   for (const record of existing) {
@@ -297,6 +308,7 @@ async function resolveDemoIngredients(
   const idsByName = new Map<string, Types.ObjectId>();
   const toCreate: KurumiRecipeIngredientDefinition[] = [];
   const toUpdateCategory: DemoIngredientCategoryUpdate[] = [];
+  const toUpdateAllergenCandidates: DemoIngredientAllergenUpdate[] = [];
   for (const { definition, slug } of keys) {
     const record = existingBySlug.get(slug);
     if (!record) {
@@ -314,8 +326,21 @@ async function resolveDemoIngredients(
         category: definition.category
       });
     }
+    const currentCandidates = Array.isArray(record.allergens) ? record.allergens : [];
+    if (
+      record.allergenInfoStatus !== "REVIEWED"
+      && (JSON.stringify(currentCandidates) !== JSON.stringify(definition.allergenCandidates)
+        || record.allergenInfoSourceType !== "CURATED_MENU_DESCRIPTION"
+        || record.allergenInfoSourceNote !== definition.allergenInfoSourceNote)
+    ) {
+      toUpdateAllergenCandidates.push({
+        id: record._id,
+        allergenCandidates: definition.allergenCandidates,
+        allergenInfoSourceNote: definition.allergenInfoSourceNote
+      });
+    }
   }
-  return { idsByName, toCreate, toUpdateCategory };
+  return { idsByName, toCreate, toUpdateCategory, toUpdateAllergenCandidates };
 }
 
 function printDryRun(
@@ -327,6 +352,7 @@ function printDryRun(
   toCreate: readonly KurumiRecipeIngredientDefinition[],
   toReuse: number,
   toUpdateCategory: readonly DemoIngredientCategoryUpdate[],
+  toUpdateAllergenCandidates: readonly DemoIngredientAllergenUpdate[],
   refreshDemo: boolean
 ): void {
   const existingPreserved = allRecipes.length - pending.length;
@@ -336,7 +362,7 @@ function printDryRun(
   console.log(`Account verified: ${username}; restaurant: ${TARGET_RESTAURANT_NAME}`);
   console.log(`Official items: ${allRecipes.length}; existing recipes preserved: ${existingPreserved}; empty recipes to seed: ${emptyToSeed}; script-generated recipes to refresh: ${demoToRefresh}`);
   console.log(`Recipe evidence: ${allRecipes.filter((recipe) => recipe.basis === "menu-description").length} use described ingredients; ${allRecipes.filter((recipe) => recipe.basis === "menu-name-inference").length} inferred from item/category.`);
-  console.log(`Restaurant-scoped demo ingredients: ${toCreate.length} create, ${toReuse} reuse, ${toUpdateCategory.length} category corrections; all unverified and without nutrient facts.`);
+  console.log(`Restaurant-scoped demo ingredients: ${toCreate.length} create, ${toReuse} reuse, ${toUpdateCategory.length} category corrections, ${toUpdateAllergenCandidates.length} candidate allergen updates; allergen status remains UNKNOWN.`);
   console.log(`Current menu records: ${currentMenuCount}; tables preserved: ${currentTableCount}; nutrition/allergen cache writes: 0; deletions: 0.`);
   console.log(`To apply, rerun with --apply${refreshDemo ? " --refresh-demo" : ""} --confirm-db QDish --confirm-host <configured-host>.`);
 }
@@ -409,12 +435,17 @@ async function verifyAfterApply(
 
   const persistedIngredients = await Ingredient.find({
     slug: { $in: definitions.map((definition) => kurumiDemoIngredientSlug(String(restaurantId), definition.name)) }
-  }).select("_id slug name category defaultUnit gramsPerUnit restaurantId isVerified source caloriesPer100g proteinPer100g carbPer100g fatPer100g fiberPer100g sugarPer100g sodiumPer100g").lean() as unknown as IngredientRecord[];
+  }).select("_id slug name category defaultUnit gramsPerUnit restaurantId isVerified source allergens allergenInfoStatus allergenInfoSourceType allergenInfoSourceNote caloriesPer100g proteinPer100g carbPer100g fatPer100g fiberPer100g sugarPer100g sodiumPer100g").lean() as unknown as IngredientRecord[];
   const bySlug = new Map(persistedIngredients.map((ingredient) => [ingredient.slug, ingredient]));
   for (const definition of definitions) {
     const record = bySlug.get(kurumiDemoIngredientSlug(String(restaurantId), definition.name));
     if (!record) fail("Post-seed demo ingredient is missing");
     assertDemoIngredient(record, definition, restaurantId);
+    if (record.allergenInfoStatus !== "REVIEWED" && (
+      record.allergenInfoStatus !== "UNKNOWN"
+      || JSON.stringify(record.allergens ?? []) !== JSON.stringify(definition.allergenCandidates)
+      || record.allergenInfoSourceType !== "CURATED_MENU_DESCRIPTION"
+    )) fail("Post-seed allergen candidate verification failed");
   }
 }
 
@@ -441,12 +472,36 @@ async function applyRecipes(
     );
     if (result.matchedCount !== 1) fail("Demo ingredient changed during safe category correction; stopped");
   }
+  for (const update of ingredientResolution.toUpdateAllergenCandidates) {
+    const missingFacts = Object.fromEntries(NUTRIENT_FIELDS.map((field) => [field, { $exists: false }]));
+    const result = await Ingredient.updateOne(
+      {
+        _id: update.id,
+        restaurantId,
+        source: "kurumi-demo-estimate",
+        isVerified: false,
+        allergenInfoStatus: { $ne: "REVIEWED" },
+        ...missingFacts
+      },
+      {
+        $set: {
+          allergens: update.allergenCandidates,
+          allergenInfoStatus: "UNKNOWN",
+          allergenInfoSourceType: "CURATED_MENU_DESCRIPTION",
+          allergenInfoSourceNote: update.allergenInfoSourceNote
+        },
+        $unset: { allergenReviewedBy: "", allergenReviewedAt: "" }
+      },
+      { runValidators: true }
+    );
+    if (result.matchedCount !== 1) fail("Demo allergen candidates changed or were reviewed during safe update; stopped");
+  }
   for (const definition of ingredientResolution.toCreate) {
     const ingredient = await Ingredient.create({
       ...definition,
       slug: kurumiDemoIngredientSlug(String(restaurantId), definition.name),
       restaurantId,
-      allergens: [],
+      allergens: definition.allergenCandidates,
       attributes: [],
       isActive: true
     });
@@ -532,6 +587,7 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
         ingredientResolution.toCreate,
         ingredientResolution.idsByName.size,
         ingredientResolution.toUpdateCategory,
+        ingredientResolution.toUpdateAllergenCandidates,
         options.refreshDemo
       );
       return;
@@ -555,8 +611,8 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     );
     console.log("KURUMI demo recipes applied and verified.");
     console.log(`Recipes written: ${pending.length}; existing recipes preserved: ${fullRecipePlan.recipes.length - pending.length}.`);
-    console.log(`Unverified restaurant-local ingredients: ${ingredientResolution.toCreate.length} created, ${ingredientResolution.idsByName.size} reused, ${ingredientResolution.toUpdateCategory.length} category corrections.`);
-    console.log("Nutrition/allergen fields, menu listing data, account, payments, subscriptions, tables, categories, and legacy menu items were preserved; no records deleted.");
+    console.log(`Restaurant-local demo ingredients: ${ingredientResolution.toCreate.length} created, ${ingredientResolution.idsByName.size} reused, ${ingredientResolution.toUpdateCategory.length} category corrections, ${ingredientResolution.toUpdateAllergenCandidates.length} candidate allergen updates.`);
+    console.log("Allergen candidates remain UNKNOWN until restaurant review; verified ingredients and reviewed allergen declarations are preserved. Menu listing data, account, payments, subscriptions, tables, categories, and legacy menu items were preserved; no records deleted.");
   } finally {
     if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
   }

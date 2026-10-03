@@ -63,7 +63,13 @@ async function run() {
     category: "Test",
     imageUrl: "",
     allergens: ["nuts"],
-    allergenInfoStatus: "REVIEWED"
+    allergenInfoStatus: "REVIEWED",
+    reviewedAllergens: ["NUTS"],
+    allergenReviewMethod: "MANUAL",
+    allergenReviewSourceType: "STAFF_ATTESTATION",
+    allergenReviewSourceNote: "Đối chiếu nhãn nguyên liệu.",
+    allergenReviewedBy: ownerId,
+    allergenReviewedAt: new Date()
   });
   const foreignDish = await MenuItem.create({
     restaurantId: otherRestaurant._id,
@@ -124,10 +130,15 @@ async function run() {
     assert.equal(reviewedResponse.status, 201, "a declared conflict must not block ordering");
     const reviewedOrder = await reviewedResponse.json() as any;
     assert.equal(reviewedOrder.items[0].allergenInfoStatus, "REVIEWED");
-    assert.deepEqual(reviewedOrder.items[0].allergenWarnings, ["NUTS"]);
+    assert.deepEqual(reviewedOrder.items[0].allergenWarnings, ["PEANUT", "TREE_NUTS"]);
+    assert.deepEqual(reviewedOrder.items[0].allergenContainsWarnings, ["PEANUT", "TREE_NUTS"]);
+    assert.deepEqual(reviewedOrder.items[0].allergenMayContainWarnings, []);
+    assert.equal(reviewedOrder.items[0].allergenWarningSource, "CONTAINS");
+    assert.equal(reviewedOrder.items[0].allergenInformationIncomplete, false);
     assert.equal(reviewedOrder.items[0].allergens, undefined, "client allergen arrays are not persisted");
     assert.equal(reviewedOrder.note, "Ít cay giúp mình", "customer notes remain separate");
-    assert.equal(reviewedOrder.reportedAllergies, undefined, "the full profile is omitted when all items are reviewed");
+    assert.deepEqual(reviewedOrder.reportedAllergies, ["PEANUT", "TREE_NUTS"], "the report is snapshotted for staff even when a menu item is reviewed");
+    assert.equal(reviewedOrder.allergyDisclosureStatus, "DECLARED");
 
     const foreignResponse = await createOrder({
       items: [{
@@ -144,7 +155,10 @@ async function run() {
     const foreignOrder = await foreignResponse.json() as any;
     assert.equal(foreignOrder.items[0].allergenInfoStatus, "UNKNOWN", "another restaurant's allergen data is not trusted");
     assert.deepEqual(foreignOrder.items[0].allergenWarnings, []);
-    assert.deepEqual(foreignOrder.reportedAllergies, ["NUTS"]);
+    assert.deepEqual(foreignOrder.items[0].allergenContainsWarnings, []);
+    assert.deepEqual(foreignOrder.items[0].allergenMayContainWarnings, []);
+    assert.deepEqual(foreignOrder.reportedAllergies, ["PEANUT", "TREE_NUTS"]);
+    assert.equal(foreignOrder.allergyDisclosureStatus, "DECLARED");
 
     const secondDinerResponse = await createOrder({
       items: [{ menuItemId: foreignDish._id.toString(), name: foreignDish.name, price: 200, quantity: 1 }],
@@ -158,7 +172,8 @@ async function run() {
     assert.ok(bill);
     assert.equal(bill.itemsSnapshot.length, 3, "bill aggregation preserves distinct warning contexts");
     assert.deepEqual(bill.itemsSnapshot.map((item) => item.allergenInfoStatus), ["REVIEWED", "UNKNOWN", "UNKNOWN"]);
-    assert.deepEqual(bill.itemsSnapshot.map((item) => item.reportedAllergies), [undefined, ["NUTS"], ["FISH"]]);
+    assert.deepEqual(bill.itemsSnapshot.map((item) => item.reportedAllergies), [["PEANUT", "TREE_NUTS"], ["PEANUT", "TREE_NUTS"], ["FISH"]]);
+    assert.deepEqual(bill.itemsSnapshot.map((item) => item.allergyDisclosureStatus), ["DECLARED", "DECLARED", "DECLARED"]);
     assert.equal(bill.itemsSnapshot[0].notes, "Ít cay giúp mình");
 
     const historyResponse = await fetch(`${endpoint}?restaurantId=${restaurant._id}&tableNumber=${tableCode}&sessionId=${session._id}`);
@@ -166,14 +181,20 @@ async function run() {
     const publicOrders = await historyResponse.json() as any[];
     assert.equal(publicOrders.length, 3);
     assert.ok(publicOrders.every((order) => !Object.prototype.hasOwnProperty.call(order, "reportedAllergies")));
+    assert.ok(publicOrders.every((order) => !Object.prototype.hasOwnProperty.call(order, "allergyDisclosureStatus")));
     assert.ok(publicOrders.every((order) => !Object.prototype.hasOwnProperty.call(order.items[0], "allergenInfoStatus")));
     assert.ok(publicOrders.every((order) => !Object.prototype.hasOwnProperty.call(order.items[0], "allergenWarnings")));
+    assert.ok(publicOrders.every((order) => !Object.prototype.hasOwnProperty.call(order.items[0], "allergenContainsWarnings")));
+    assert.ok(publicOrders.every((order) => !Object.prototype.hasOwnProperty.call(order.items[0], "allergenMayContainWarnings")));
 
     const currentBillResponse = await fetch(`http://127.0.0.1:${address.port}/api/bills/current?restaurantId=${restaurant._id}&tableNumber=${tableCode}&sessionId=${session._id}`);
     assert.equal(currentBillResponse.status, 200);
     const publicCurrentBill = await currentBillResponse.json() as any;
     assert.ok(publicCurrentBill.bill.itemsSnapshot.every((item: any) => !Object.prototype.hasOwnProperty.call(item, "reportedAllergies")));
+    assert.ok(publicCurrentBill.bill.itemsSnapshot.every((item: any) => !Object.prototype.hasOwnProperty.call(item, "allergyDisclosureStatus")));
     assert.ok(publicCurrentBill.bill.itemsSnapshot.every((item: any) => !Object.prototype.hasOwnProperty.call(item, "allergenInfoStatus")));
+    assert.ok(publicCurrentBill.bill.itemsSnapshot.every((item: any) => !Object.prototype.hasOwnProperty.call(item, "allergenContainsWarnings")));
+    assert.ok(publicCurrentBill.bill.itemsSnapshot.every((item: any) => !Object.prototype.hasOwnProperty.call(item, "allergenMayContainWarnings")));
     assert.ok(publicCurrentBill.orders.every((order: any) => !Object.prototype.hasOwnProperty.call(order, "reportedAllergies")));
     assert.ok(publicCurrentBill.orders.every((order: any) => !Object.prototype.hasOwnProperty.call(order.items[0], "allergenWarnings")));
   } finally {

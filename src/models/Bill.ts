@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { DINING_ALLERGIES } from "../services/diningProfileValidation.js";
 
 export enum BillStatus {
   UNPAID = "UNPAID",
@@ -23,7 +24,12 @@ export interface IBillItemSnapshot {
   notes?: string;
   allergenInfoStatus?: "UNKNOWN" | "REVIEWED";
   allergenWarnings?: string[];
+  allergenContainsWarnings?: string[];
+  allergenMayContainWarnings?: string[];
+  allergenWarningSource?: "CANDIDATE" | "CONTAINS" | "MAY_CONTAIN" | "MIXED";
+  allergenInformationIncomplete?: boolean;
   reportedAllergies?: string[];
+  allergyDisclosureStatus?: "NOT_ANSWERED" | "NONE_DECLARED" | "DECLARED";
 }
 
 export interface IBill extends Document {
@@ -59,9 +65,14 @@ const BillItemSnapshotSchema = new Schema<IBillItemSnapshot>(
     notes: { type: String, trim: true },
     allergenInfoStatus: { type: String, enum: ["UNKNOWN", "REVIEWED"], default: "UNKNOWN" },
     allergenWarnings: { type: [String], default: [] },
+    allergenContainsWarnings: { type: [String], default: [] },
+    allergenMayContainWarnings: { type: [String], default: [] },
+    allergenWarningSource: { type: String, enum: ["CANDIDATE", "CONTAINS", "MAY_CONTAIN", "MIXED"] },
+    allergenInformationIncomplete: { type: Boolean, default: true },
+    allergyDisclosureStatus: { type: String, enum: ["NOT_ANSWERED", "NONE_DECLARED", "DECLARED"], default: "NOT_ANSWERED" },
     reportedAllergies: {
       type: [String],
-      enum: ["GLUTEN", "DAIRY", "NUTS", "SHELLFISH", "SOY", "EGGS", "FISH"],
+      enum: DINING_ALLERGIES,
       default: undefined
     }
   },

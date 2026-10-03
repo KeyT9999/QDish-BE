@@ -1,5 +1,7 @@
 import type { ComputedNutrition } from "./nutritionService.js";
 import { normalizeAllergenInfoStatus } from "./allergenInfoStatusPolicy.js";
+import { normalizeAllergenCodes } from "./allergenSafetyService.js";
+import { hasValidMenuAllergenReviewDeclaration } from "./menuAllergenReviewService.js";
 import {
   getPlanLimits,
   resolveOwnerByRestaurant
@@ -52,14 +54,50 @@ interface MenuItemResponseSource {
   foodAttributes?: string[];
   allergens?: string[];
   allergenInfoStatus?: unknown;
+  allergenCoverageStatus?: "UNKNOWN" | "INCOMPLETE" | "COMPLETE";
+  allergenUnverifiedIngredientCount?: number;
+  reviewedAllergens?: string[];
+  mayContainAllergens?: string[];
+  allergenReviewMethod?: string;
+  allergenReviewSourceType?: string;
+  allergenReviewSourceNote?: string;
+  allergenReviewedBy?: unknown;
+  allergenReviewedAt?: unknown;
 }
 
 export function serializeMenuItemForFeatures<T extends MenuItemResponseSource>(
   item: T,
   foodAttributesEnabled: boolean
 ) {
+  const {
+    allergenReviewMethod: _allergenReviewMethod,
+    allergenReviewSourceType: _allergenReviewSourceType,
+    allergenReviewSourceNote: _allergenReviewSourceNote,
+    allergenReviewedBy: _allergenReviewedBy,
+    allergenReviewedAt: _allergenReviewedAt,
+    ...publicItem
+  } = item;
+  const reviewedAllergens = Array.isArray(item.reviewedAllergens)
+    ? normalizeAllergenCodes(item.reviewedAllergens)
+    : undefined;
+  const mayContainAllergens = Array.isArray(item.mayContainAllergens)
+    ? normalizeAllergenCodes(item.mayContainAllergens)
+    : undefined;
+  const declarationIsValid = hasValidMenuAllergenReviewDeclaration({
+    method: item.allergenReviewMethod,
+    sourceType: item.allergenReviewSourceType,
+    sourceNote: item.allergenReviewSourceNote,
+    reviewerId: item.allergenReviewedBy,
+    reviewedAt: item.allergenReviewedAt,
+    containsAllergens: item.reviewedAllergens,
+    mayContainAllergens: item.mayContainAllergens
+  });
+  const infoStatus = normalizeAllergenInfoStatus(item.allergenInfoStatus) === "REVIEWED"
+    && declarationIsValid
+    ? "REVIEWED"
+    : "UNKNOWN";
   return {
-    ...item,
+    ...publicItem,
     id: item._id,
     nutrition: {
       calories: item.calories ?? 0,
@@ -78,7 +116,11 @@ export function serializeMenuItemForFeatures<T extends MenuItemResponseSource>(
       ? item.foodAttributes ?? []
       : [],
     allergens: item.allergens ?? [],
-    allergenInfoStatus: normalizeAllergenInfoStatus(item.allergenInfoStatus)
+    allergenInfoStatus: infoStatus,
+    allergenCoverageStatus: item.allergenCoverageStatus ?? "UNKNOWN",
+    allergenUnverifiedIngredientCount: item.allergenUnverifiedIngredientCount ?? 0,
+    reviewedAllergens: infoStatus === "REVIEWED" ? reviewedAllergens ?? [] : [],
+    mayContainAllergens: infoStatus === "REVIEWED" ? mayContainAllergens ?? [] : []
   };
 }
 

@@ -7,8 +7,10 @@ import {
   assertIngredientsAccessible,
   resolveIngredientForRestaurant
 } from "./ingredientAccessService.js";
-import { normalizeAllergen } from "./allergenSafetyService.js";
+import { normalizeAllergenCodes } from "./allergenSafetyService.js";
 import { invalidateAllergenReview } from "./allergenInfoStatusPolicy.js";
+import { resolveAllergenCoverage } from "./allergenCoveragePolicy.js";
+import { hasVerifiedIngredientAllergenEvidence } from "./ingredientAllergenPolicy.js";
 
 export interface ComputedNutrition {
   calories: number;
@@ -20,6 +22,8 @@ export interface ComputedNutrition {
   sodium: number;
   attributes: string[];
   allergens: string[];
+  allergenCoverageStatus?: "UNKNOWN" | "INCOMPLETE" | "COMPLETE";
+  allergenUnverifiedIngredientCount?: number;
   nutritionConfidence: number;
   completeness?: number;
   isComplete?: boolean;
@@ -90,6 +94,7 @@ export class NutritionService {
     let totalSugar = 0;
     let totalSodium = 0;
     let hasCompleteNutritionFacts = true;
+    let unverifiedIngredientCount = 0;
     const allergenSet = new Set<string>();
     const resolvedIngredients: Array<{
       ingredientId: string;
@@ -103,6 +108,10 @@ export class NutritionService {
       const ingredient = await resolveIngredientForRestaurant(item.ingredientId, restaurantId);
       if (!ingredient) {
         continue;
+      }
+
+      if (!hasVerifiedIngredientAllergenEvidence(ingredient)) {
+        unverifiedIngredientCount += 1;
       }
 
       const grams = this.resolveGrams(item.quantity, item.unit, ingredient);
@@ -130,8 +139,8 @@ export class NutritionService {
 
       if (ingredient.allergens && ingredient.allergens.length > 0) {
         ingredient.allergens.forEach((a) => {
-          const normalized = normalizeAllergen(a);
-          if (normalized) allergenSet.add(normalized);
+          const normalized = normalizeAllergenCodes([a]);
+          normalized?.forEach((allergen) => allergenSet.add(allergen));
         });
       }
 
@@ -159,6 +168,11 @@ export class NutritionService {
     const resolvedIngredientCount = resolvedIngredients.length;
     const requestedIngredientCount = ingredientsInput.length;
     const missingIngredientCount = requestedIngredientCount - resolvedIngredientCount;
+    const allergenCoverage = resolveAllergenCoverage({
+      requestedIngredientCount,
+      resolvedIngredientCount,
+      unverifiedIngredientCount
+    });
     const completeness = requestedIngredientCount > 0
       ? Number((resolvedIngredientCount / requestedIngredientCount).toFixed(2))
       : 0;
@@ -175,6 +189,8 @@ export class NutritionService {
       sodium,
       attributes: [],
       allergens: Array.from(allergenSet),
+      allergenCoverageStatus: allergenCoverage.status,
+      allergenUnverifiedIngredientCount: allergenCoverage.unverifiedIngredientCount,
       nutritionConfidence,
       completeness,
       isComplete,
@@ -215,6 +231,8 @@ export class NutritionService {
       dish.sodium = 0;
       dish.allergens = [];
       invalidateAllergenReview(dish);
+      dish.allergenCoverageStatus = "UNKNOWN";
+      dish.allergenUnverifiedIngredientCount = 0;
       dish.foodAttributes = [];
       dish.confidenceScore = 0;
       dish.nutritionCompleteness = 0;
@@ -269,6 +287,8 @@ export class NutritionService {
         sodium: computed.sodium,
         attributes: computed.attributes,
         allergens: computed.allergens,
+        allergenCoverageStatus: computed.allergenCoverageStatus ?? "UNKNOWN",
+        allergenUnverifiedIngredientCount: computed.allergenUnverifiedIngredientCount ?? 0,
         nutritionConfidence: computed.nutritionConfidence,
         completeness: computed.completeness,
         isComplete: computed.isComplete,
@@ -290,6 +310,8 @@ export class NutritionService {
     dish.sodium = computed.sodium;
     dish.allergens = computed.allergens;
     invalidateAllergenReview(dish);
+    dish.allergenCoverageStatus = computed.allergenCoverageStatus ?? "UNKNOWN";
+    dish.allergenUnverifiedIngredientCount = computed.allergenUnverifiedIngredientCount ?? 0;
     dish.foodAttributes = computed.attributes;
     dish.confidenceScore = Math.round(computed.nutritionConfidence * 100);
     dish.nutritionCompleteness = computed.completeness;

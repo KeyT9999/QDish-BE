@@ -1,13 +1,18 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 
+import { Ingredient } from "../models/Ingredient.js";
 import { MenuItem } from "../models/MenuItem.js";
 import { AuthRequest, requireAuth } from "../middleware/auth.js";
 import { NutritionService } from "../services/nutritionService.js";
 import { resolveAllergenInfoStatusUpdate } from "../services/allergenInfoStatusPolicy.js";
+import { resolveMenuAllergenReview } from "../services/menuAllergenReviewService.js";
+import { hasVerifiedIngredientAllergenEvidence } from "../services/ingredientAllergenPolicy.js";
+import { normalizeAllergenCodes } from "../services/allergenSafetyService.js";
 import {
   assertIngredientsAccessible,
-  IngredientAccessDeniedError
+  IngredientAccessDeniedError,
+  isIngredientAccessible
 } from "../services/ingredientAccessService.js";
 import {
   isFoodAttributesEnabledForRestaurant,
@@ -15,6 +20,81 @@ import {
 } from "../services/foodAttributeEntitlementService.js";
 
 const router = Router();
+
+// A REVIEWED menu declaration can only be written through this evidence-backed route.
+router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) => {
+  const restaurantId = req.auth?.restaurantId;
+  if (!restaurantId || !["RESTAURANT_OWNER", "RESTAURANT_ADMIN"].includes(req.auth?.role ?? "")) {
+    return res.status(403).json({ message: "Chỉ chủ nhà hàng hoặc quản trị viên mới được xác nhận thông tin dị ứng" });
+  }
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: "ID món ăn không hợp lệ" });
+  }
+  if (!mongoose.isValidObjectId(req.auth?.sub)) {
+    return res.status(403).json({ message: "Không xác định được nhân viên xác nhận" });
+  }
+
+  const item = await MenuItem.findOne({ _id: req.params.id, restaurantId });
+  if (!item) return res.status(404).json({ message: "Không tìm thấy món ăn" });
+
+  let recipeIngredientsReviewed = false;
+  let recipeAllergens: string[] | undefined;
+  if (req.body?.method === "RECIPE" && item.ingredients.length > 0) {
+    try {
+      await assertIngredientsAccessible(item.ingredients, restaurantId);
+      const ingredientIds = [...new Set(item.ingredients.map((row) => row.ingredientId.toString()))];
+      const ingredients = await Ingredient.find({ _id: { $in: ingredientIds } }).lean();
+      recipeIngredientsReviewed = ingredients.length === ingredientIds.length
+        && ingredients.every((ingredient) => isIngredientAccessible(ingredient, restaurantId)
+          && hasVerifiedIngredientAllergenEvidence(ingredient));
+      if (recipeIngredientsReviewed) {
+        recipeAllergens = normalizeAllergenCodes(ingredients.flatMap((ingredient) => ingredient.allergens));
+        if (!recipeAllergens) recipeIngredientsReviewed = false;
+      }
+    } catch (error) {
+      if (error instanceof IngredientAccessDeniedError) {
+        return res.status(400).json({ message: "Công thức tham chiếu nguyên liệu không thuộc nhà hàng", code: "RECIPE_NOT_COMPLETE" });
+      }
+      console.error("Không thể kiểm tra bằng chứng allergen của nguyên liệu trong công thức", error);
+      return res.status(500).json({ message: "Không thể xác minh độ bao phủ allergen của công thức" });
+    }
+  }
+
+  const review = resolveMenuAllergenReview({ ...item.toObject(), recipeIngredientsReviewed, recipeAllergens }, {
+    method: req.body?.method,
+    containsAllergens: req.body?.containsAllergens,
+    mayContainAllergens: req.body?.mayContainAllergens,
+    sourceType: req.body?.sourceType,
+    sourceNote: req.body?.sourceNote,
+    reviewerId: req.auth?.sub ?? "",
+    now: new Date()
+  });
+  if (!review.ok) {
+    const messages = {
+      INVALID_METHOD: "Chọn cách xác nhận thành phần hợp lệ",
+      INVALID_ALLERGENS: "Danh sách allergen có mã không hợp lệ",
+      OVERLAPPING_LISTS: "Một allergen không thể đồng thời nằm trong 'có chứa' và 'có thể chứa'",
+      INVALID_SOURCE: "Nguồn xác nhận không phù hợp với cách kiểm tra",
+      MISSING_EVIDENCE: "Cần ghi nguồn và nội dung đối chiếu trước khi xác nhận",
+      RECIPE_NOT_COMPLETE: "Công thức còn thiếu hoặc có nguyên liệu chưa xác minh; hãy bổ sung dữ liệu hoặc dùng khai báo thủ công",
+      RECIPE_ALLERGENS_MISSING: "Danh sách “Có chứa” phải bao gồm toàn bộ allergen đã xác minh trong nguyên liệu công thức"
+    } as const;
+    return res.status(400).json({ message: messages[review.reason], code: review.reason });
+  }
+
+  item.reviewedAllergens = review.value.containsAllergens;
+  item.mayContainAllergens = review.value.mayContainAllergens;
+  item.allergenInfoStatus = "REVIEWED";
+  item.allergenReviewMethod = review.value.method;
+  item.allergenReviewSourceType = review.value.sourceType;
+  item.allergenReviewSourceNote = review.value.sourceNote;
+  item.allergenReviewedBy = new mongoose.Types.ObjectId(review.value.reviewerId);
+  item.allergenReviewedAt = review.value.reviewedAt;
+  await item.save();
+
+  const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(restaurantId);
+  return res.json(serializeMenuItemForFeatures(item.toObject(), foodAttributesEnabled));
+});
 
 // Public: lấy menu theo restaurantId (bắt buộc)
 router.get("/", async (req, res) => {
@@ -215,6 +295,23 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
     ingredients !== undefined ||
     servingCount !== undefined ||
     cookingMethod !== undefined;
+  const allergenReviewInvalidated = recipeChanged || description !== undefined;
+
+  if (allergenReviewInvalidated) {
+    update.allergenInfoStatus = "UNKNOWN";
+    update.reviewedAllergens = [];
+    update.mayContainAllergens = [];
+    update.allergenReviewMethod = undefined;
+    update.allergenReviewSourceType = undefined;
+    update.allergenReviewSourceNote = undefined;
+    update.allergenReviewedBy = undefined;
+    update.allergenReviewedAt = undefined;
+  }
+  if (recipeChanged) {
+    update.allergens = [];
+    update.allergenCoverageStatus = "UNKNOWN";
+    update.allergenUnverifiedIngredientCount = 0;
+  }
 
   const allergenStatusUpdate = resolveAllergenInfoStatusUpdate(recipeChanged, allergenInfoStatus);
   if (!allergenStatusUpdate.ok) {
@@ -222,6 +319,15 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   }
   if (allergenStatusUpdate.status !== undefined) {
     update.allergenInfoStatus = allergenStatusUpdate.status;
+    if (allergenStatusUpdate.status === "UNKNOWN" && !allergenReviewInvalidated) {
+      update.reviewedAllergens = [];
+      update.mayContainAllergens = [];
+      update.allergenReviewMethod = undefined;
+      update.allergenReviewSourceType = undefined;
+      update.allergenReviewSourceNote = undefined;
+      update.allergenReviewedBy = undefined;
+      update.allergenReviewedAt = undefined;
+    }
   }
 
   if (Array.isArray(ingredients)) {
