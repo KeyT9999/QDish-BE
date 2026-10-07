@@ -7,6 +7,12 @@ export enum UserRole {
   RESTAURANT_OWNER = "RESTAURANT_OWNER"
 }
 
+export enum UserLanguage {
+  VI = "vi",
+  EN = "en",
+  ZH_CN = "zh-CN"
+}
+
 export interface IUser extends Document {
   username: string;
   passwordHash: string;
@@ -17,6 +23,7 @@ export interface IUser extends Document {
   fullName?: string; // Họ tên chủ nhà hàng
   email?: string; // Email chủ nhà hàng (sparse unique)
   phone?: string; // Điện thoại chủ nhà hàng
+  preferredLanguage?: UserLanguage;
   isEmailVerified?: boolean; // Xác thực email
   updatedBy?: Types.ObjectId; // Admin nào tạo/cập nhật
 }
@@ -65,6 +72,11 @@ const UserSchema = new Schema<IUser>(
     phone: {
       type: String,
       trim: true
+    },
+    preferredLanguage: {
+      type: String,
+      enum: Object.values(UserLanguage),
+      default: UserLanguage.VI
     },
     isEmailVerified: {
       type: Boolean,
