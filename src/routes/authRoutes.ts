@@ -3,11 +3,11 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import fetch from "node-fetch";
 
-import { User, UserRole } from "../models/User.js";
+import { User, UserLanguage, UserRole } from "../models/User.js";
 import { Restaurant } from "../models/Restaurant.js";
 import { PasswordResetToken } from "../models/PasswordResetToken.js";
 import { sendPasswordResetEmail, sendOwnerRegisterOTP } from "../services/emailService.js";
-import { AuthRequest, requireAuth } from "../middleware/auth.js";
+import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import { OwnerRegisterToken } from "../models/OwnerRegisterToken.js";
 
 const router = Router();
@@ -506,6 +506,61 @@ router.post("/google-login", async (req, res) => {
   }
 });
 
+
+router.get(
+  "/preferences",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER),
+  async (req: AuthRequest, res) => {
+    if (!req.auth?.sub) {
+      return res.status(401).json({ message: "Không xác định được người dùng" });
+    }
+
+    try {
+      const user = await User.findById(req.auth.sub).select("role preferredLanguage");
+      if (!user) return res.status(404).json({ message: "User không tồn tại" });
+      if (user.role !== UserRole.RESTAURANT_OWNER) {
+        return res.status(403).json({ message: "Không đủ quyền truy cập" });
+      }
+
+      return res.json({ preferredLanguage: user.preferredLanguage || UserLanguage.VI });
+    } catch (error) {
+      console.error("Error loading owner preferences:", error);
+      return res.status(500).json({ message: "Không thể tải thiết lập tài khoản" });
+    }
+  }
+);
+
+router.patch(
+  "/preferences",
+  requireAuth,
+  requireRole(UserRole.RESTAURANT_OWNER),
+  async (req: AuthRequest, res) => {
+    if (!req.auth?.sub) {
+      return res.status(401).json({ message: "Không xác định được người dùng" });
+    }
+
+    const preferredLanguage = req.body?.preferredLanguage;
+    if (!Object.values(UserLanguage).includes(preferredLanguage)) {
+      return res.status(400).json({ message: "Ngôn ngữ giao diện không được hỗ trợ" });
+    }
+
+    try {
+      const user = await User.findById(req.auth.sub).select("role preferredLanguage");
+      if (!user) return res.status(404).json({ message: "User không tồn tại" });
+      if (user.role !== UserRole.RESTAURANT_OWNER) {
+        return res.status(403).json({ message: "Không đủ quyền truy cập" });
+      }
+
+      user.preferredLanguage = preferredLanguage;
+      await user.save();
+      return res.json({ preferredLanguage: user.preferredLanguage });
+    } catch (error) {
+      console.error("Error updating owner preferences:", error);
+      return res.status(500).json({ message: "Không thể lưu thiết lập tài khoản" });
+    }
+  }
+);
 
 // Đổi mật khẩu cho user hiện tại (dựa trên JWT)
 router.post("/change-password", requireAuth, async (req: AuthRequest, res) => {
