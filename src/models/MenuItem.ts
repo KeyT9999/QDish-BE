@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
+import type { MenuItemTranslationValue, MenuItemTranslations, TranslationEntry } from "./MenuTranslation.js";
 
 export interface IDishIngredient {
   ingredientId: Types.ObjectId;
@@ -14,6 +15,7 @@ export interface IMenuItem extends Document {
   price: number;
   category: string;
   categoryId?: Types.ObjectId;
+  translations?: MenuItemTranslations;
   imageUrl: string;
   available: boolean;
   
@@ -72,6 +74,31 @@ const DishIngredientSchema = new Schema<IDishIngredient>({
   }
 }, { _id: false });
 
+const MenuItemTranslationValueSchema = new Schema<MenuItemTranslationValue>({
+  name: { type: String, required: true, trim: true, maxlength: 200 },
+  description: { type: String, required: true, trim: true, maxlength: 2000, default: "" }
+}, { _id: false });
+
+const MenuItemApprovedTranslationSchema = new Schema<NonNullable<TranslationEntry<MenuItemTranslationValue>["approved"]>>({
+  value: { type: MenuItemTranslationValueSchema, required: true },
+  status: { type: String, enum: ["APPROVED", "STALE"], required: true }
+}, { _id: false });
+
+const MenuItemDraftTranslationSchema = new Schema<NonNullable<TranslationEntry<MenuItemTranslationValue>["draft"]>>({
+  value: { type: MenuItemTranslationValueSchema, required: true },
+  generatedAt: { type: Date, required: true }
+}, { _id: false });
+
+const MenuItemTranslationEntrySchema = new Schema<TranslationEntry<MenuItemTranslationValue>>({
+  approved: { type: MenuItemApprovedTranslationSchema, default: undefined },
+  draft: { type: MenuItemDraftTranslationSchema, default: undefined }
+}, { _id: false });
+
+const MenuItemTranslationsSchema = new Schema({
+  en: { type: MenuItemTranslationEntrySchema, default: undefined },
+  zhCN: { type: MenuItemTranslationEntrySchema, default: undefined }
+}, { _id: false });
+
 const MenuItemSchema = new Schema<IMenuItem>(
   {
     restaurantId: {
@@ -104,6 +131,10 @@ const MenuItemSchema = new Schema<IMenuItem>(
       type: Schema.Types.ObjectId,
       ref: "Category",
       required: false
+    },
+    translations: {
+      type: MenuItemTranslationsSchema,
+      default: undefined
     },
     imageUrl: {
       type: String,
