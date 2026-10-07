@@ -76,7 +76,7 @@ const DishIngredientSchema = new Schema<IDishIngredient>({
 
 const MenuItemTranslationValueSchema = new Schema<MenuItemTranslationValue>({
   name: { type: String, required: true, trim: true, maxlength: 200 },
-  description: { type: String, required: true, trim: true, maxlength: 2000, default: "" }
+  description: { type: String, trim: true, maxlength: 2000, default: "" }
 }, { _id: false });
 
 const MenuItemApprovedTranslationSchema = new Schema<NonNullable<TranslationEntry<MenuItemTranslationValue>["approved"]>>({

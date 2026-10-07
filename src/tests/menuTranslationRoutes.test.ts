@@ -69,9 +69,20 @@ async function run() {
 
   const originalFetch = globalThis.fetch;
   const previousApiKey = process.env.XKIRO_API_KEY;
+  const previousDeepSeekApiKey = process.env.DEEPSEEK_API_KEY;
+  let mockedProviderStatus: number | null = null;
+  let mockedDeepSeekStatus: number | null = null;
+  let mockedDeepSeekCalls = 0;
   process.env.XKIRO_API_KEY = "test-only-key";
+  process.env.DEEPSEEK_API_KEY = "";
   globalThis.fetch = (async (input, init) => {
     if (String(input) === "https://api.xkiro.com/v1/chat/completions") {
+      if (mockedProviderStatus !== null) {
+        return new Response(JSON.stringify({ error: { code: "rate_limit_exceeded" } }), {
+          status: mockedProviderStatus,
+          headers: { "retry-after": "0" }
+        });
+      }
       const request = JSON.parse(String(init?.body));
       const userContent = JSON.parse(request.messages[1].content);
       const content = userContent.task.includes("category")
@@ -82,10 +93,23 @@ async function run() {
         });
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), { status: 200 });
     }
+    if (String(input) === "https://api.deepseek.com/chat/completions") {
+      mockedDeepSeekCalls += 1;
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-only-key");
+      if (mockedDeepSeekStatus !== null) {
+        return new Response("mock upstream detail", { status: mockedDeepSeekStatus });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          en: { name: "DeepSeek English", description: "DeepSeek English description." },
+          zhCN: { name: "DeepSeek 中文", description: "DeepSeek 中文描述。" }
+        }) }, finish_reason: "stop" }]
+      }), { status: 200 });
+    }
     return originalFetch(input, init);
   }) as typeof fetch;
 
-  const { default: menuRouter } = await import("../routes/menuRoutes.js");
+  const { default: menuRouter, sendTranslationError } = await import("../routes/menuRoutes.js");
   const app = express();
   app.use(express.json());
   app.use("/api/menu", menuRouter);
@@ -108,6 +132,17 @@ async function run() {
   });
 
   try {
+    let unexpectedErrorStatus = 0;
+    let unexpectedErrorBody: any;
+    sendTranslationError({
+      locals: { requestId: "translation-error-test" },
+      status(status: number) { unexpectedErrorStatus = status; return this; },
+      json(body: unknown) { unexpectedErrorBody = body; return this; }
+    } as any, new Error("internal database detail"));
+    assert.equal(unexpectedErrorStatus, 500, "unexpected application errors must not be reported as bad gateway responses");
+    assert.equal(unexpectedErrorBody.code, "TRANSLATION_DRAFT_FAILED");
+    assert.equal(JSON.stringify(unexpectedErrorBody).includes("internal database detail"), false);
+
     const unauthorized = await fetch(`${baseUrl}/manage`, { headers: headers() });
     assert.equal(unauthorized.status, 401, "management reads require authentication");
 
@@ -124,6 +159,24 @@ async function run() {
     assert.equal(managedUnavailable.translations.en.displayStatus, "DRAFT");
     assert.equal(managedUnavailable.translations.en.approved.value.name, "Pork rice");
     assert.equal(managedUnavailable.translations.en.draft.value.name, "Grilled pork rice");
+
+    const noDescriptionItem = await MenuItem.create({
+      restaurantId: restaurant._id,
+      name: "Trà nóng",
+      description: "",
+      price: 12000,
+      category: "Đồ uống",
+      available: false
+    });
+    const noDescriptionDraft = await fetch(`${baseUrl}/${noDescriptionItem._id}/translations/draft`, {
+      method: "POST",
+      headers: headers(ownerToken),
+      body: JSON.stringify({})
+    });
+    assert.equal(noDescriptionDraft.status, 200, "a dish without a Vietnamese description must still save both translations");
+    const noDescriptionDraftJson = await noDescriptionDraft.json() as any;
+    assert.equal(noDescriptionDraftJson.translations.en.draft.value.description, "");
+    assert.equal(noDescriptionDraftJson.translations.zhCN.draft.value.description, "");
 
     const publicMenu = await fetch(`${baseUrl}?restaurantId=${restaurant._id}&includeUnavailable=true`);
     assert.equal(publicMenu.status, 200);
@@ -143,6 +196,65 @@ async function run() {
     assert.equal(generatedJson.translations.en.displayStatus, "DRAFT");
     assert.equal(generatedJson.translations.en.approved.value.name, "Pork rice", "regeneration preserves the currently published value");
     assert.equal(generatedJson.translations.en.draft.value.name, "Grilled pork rice");
+
+    mockedProviderStatus = 429;
+    const rateLimited = await fetch(`${baseUrl}/${availableItem._id}/translations/draft`, {
+      method: "POST",
+      headers: headers(ownerToken),
+      body: JSON.stringify({})
+    });
+    assert.equal(rateLimited.status, 429);
+    const rateLimitJson = await rateLimited.json() as any;
+    assert.equal(rateLimitJson.code, "TRANSLATION_RATE_LIMITED");
+    assert.equal(rateLimitJson.retryAfterSeconds, 0);
+    mockedProviderStatus = null;
+
+    process.env.DEEPSEEK_API_KEY = "test-only-key";
+    mockedProviderStatus = 503;
+    const fallbackDraft = await fetch(`${baseUrl}/${availableItem._id}/translations/draft`, {
+      method: "POST",
+      headers: headers(ownerToken),
+      body: JSON.stringify({})
+    });
+    assert.equal(fallbackDraft.status, 200, "a DeepSeek response is used after X-Kiro remains unavailable");
+    const fallbackDraftJson = await fallbackDraft.json() as any;
+    assert.equal(fallbackDraftJson.translations.en.draft.value.name, "DeepSeek English");
+    assert.equal(fallbackDraftJson.translations.zhCN.draft.value.name, "DeepSeek 中文");
+    assert.equal(mockedDeepSeekCalls, 1);
+    mockedProviderStatus = null;
+
+    mockedProviderStatus = 503;
+    mockedDeepSeekStatus = 503;
+    const providersFailed = await fetch(`${baseUrl}/${availableItem._id}/translations/draft`, {
+      method: "POST",
+      headers: headers(ownerToken),
+      body: JSON.stringify({})
+    });
+    assert.equal(providersFailed.status, 503);
+    const providersFailedText = await providersFailed.text();
+    assert.match(providersFailedText, /TRANSLATION_PROVIDER_FAILOVER_UNAVAILABLE/);
+    assert.equal(providersFailedText.includes("test-only-key"), false, "provider credentials never appear in the response");
+    assert.equal(providersFailedText.includes("mock upstream detail"), false, "provider response bodies stay private");
+    mockedProviderStatus = null;
+    mockedDeepSeekStatus = null;
+    process.env.DEEPSEEK_API_KEY = "";
+
+    const originalMenuItemSave = MenuItem.prototype.save;
+    let persistenceFailureResponse: Response;
+    try {
+      (MenuItem.prototype as any).save = async function () {
+        throw new Error("simulated translation draft persistence failure");
+      };
+      persistenceFailureResponse = await fetch(`${baseUrl}/${availableItem._id}/translations/draft`, {
+        method: "POST",
+        headers: headers(ownerToken),
+        body: JSON.stringify({})
+      });
+    } finally {
+      MenuItem.prototype.save = originalMenuItemSave;
+    }
+    assert.equal(persistenceFailureResponse!.status, 500, "database failures must not be reported as upstream translation failures");
+    assert.equal((await persistenceFailureResponse!.json() as any).code, "TRANSLATION_DRAFT_FAILED");
 
     const updatedDraft = await fetch(`${baseUrl}/${unavailableItem._id}/translations/en`, {
       method: "PATCH",
@@ -188,11 +300,101 @@ async function run() {
       body: JSON.stringify({ name: "Pork rice", description: "", publish: true })
     });
     assert.equal(invalidLocale.status, 400);
+
+    assert.equal((await fetch(`${baseUrl}/translations/bulk-publish`, {
+      method: "POST", headers: headers(), body: JSON.stringify({ itemIds: [] })
+    })).status, 401, "bulk publication requires authentication");
+
+    // Bulk generation preserves review work and replaces only missing/stale locales.
+    const editedAt = new Date("2026-01-02T03:04:05Z");
+    const seedBulkItem = (translations: any, restaurantId = restaurant._id) => MenuItem.create({
+      restaurantId, name: "Món thử", description: "Mô tả", price: 10000,
+      category: "Món chính", available: true, translations
+    });
+    const preservedItem = await seedBulkItem({
+      en: { approved: { value: { name: "Reviewed English", description: "Keep this." }, status: "APPROVED" } },
+      zhCN: { draft: { value: { name: "手动修改", description: "保留。" }, generatedAt: editedAt } }
+    });
+    const missingItem = await seedBulkItem({
+      en: { approved: { value: { name: "Old English", description: "Old." }, status: "STALE" } }
+    });
+    const preservedBefore = JSON.stringify(preservedItem.toObject().translations);
+    const preserveResponse = await fetch(`${baseUrl}/${preservedItem._id}/translations/draft`, {
+      method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: true })
+    });
+    assert.equal(preserveResponse.status, 200);
+    assert.equal(JSON.stringify((await MenuItem.findById(preservedItem._id).lean())!.translations), preservedBefore,
+      "preservation keeps approved English and hand-edited Chinese byte-for-byte");
+    const missingResponse = await fetch(`${baseUrl}/${missingItem._id}/translations/draft`, {
+      method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: true })
+    });
+    assert.equal(missingResponse.status, 200);
+    const missingJson = await missingResponse.json() as any;
+    assert.equal(missingJson.translations.en.draft.value.name, "Grilled pork rice", "stale approved text receives a replacement draft");
+    assert.equal(missingJson.translations.zhCN.draft.value.name, "烤猪肉饭", "missing locale receives a draft");
+    const invalidPreserve = await fetch(`${baseUrl}/${missingItem._id}/translations/draft`, {
+      method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: "true" })
+    });
+    assert.equal(invalidPreserve.status, 400, "preserveExisting must be a boolean");
+
+    const bulkPublish = (body: any, token: string | undefined = ownerToken) => fetch(`${baseUrl}/translations/bulk-publish`, {
+      method: "POST", headers: headers(token), body: JSON.stringify(body)
+    });
+    const ids = [preservedItem._id.toString(), missingItem._id.toString()];
+    assert.equal((await fetch(`${baseUrl}/translations/bulk-publish`, {
+      method: "POST", headers: headers(), body: JSON.stringify({ itemIds: ids })
+    })).status, 401);
+    assert.equal((await bulkPublish({ itemIds: ids }, staffToken)).status, 403);
+    const foreignItem = await seedBulkItem({}, otherRestaurant._id);
+    const incompleteItem = await seedBulkItem({
+      en: { draft: { value: { name: "English only", description: "English description." }, generatedAt: editedAt } },
+      zhCN: { approved: { value: { name: "旧", description: "旧描述。" }, status: "STALE" } }
+    });
+    const beforeRejected = JSON.stringify((await MenuItem.findById(missingItem._id).lean())!.translations);
+    for (const body of [
+      { itemIds: [] }, { itemIds: "bad" }, { itemIds: ["bad"] }, { itemIds: [12] },
+      { itemIds: [ids[0], ids[0]] }, { itemIds: [ids[0], ids[0].toUpperCase()] },
+      { itemIds: ids, restaurantId: otherRestaurant._id.toString() },
+      { itemIds: ids, translations: { en: { name: "Injected" } } }
+    ]) assert.equal((await bulkPublish(body)).status, 400, `reject malformed bulk body ${JSON.stringify(body)}`);
+    assert.equal((await bulkPublish({ itemIds: [ids[1], foreignItem._id.toString()] })).status, 404);
+    assert.equal((await bulkPublish({ itemIds: [ids[1], new mongoose.Types.ObjectId().toString()] })).status, 404);
+    assert.equal((await bulkPublish({ itemIds: [ids[1], incompleteItem._id.toString()] })).status, 400);
+    assert.equal(JSON.stringify((await MenuItem.findById(missingItem._id).lean())!.translations), beforeRejected,
+      "all IDs and locales are validated before any writes");
+    const bulkResponse = await bulkPublish({ itemIds: ids });
+    assert.equal(bulkResponse.status, 200);
+    const bulkJson = await bulkResponse.json() as any;
+    assert.equal(bulkJson.publishedCount, 2);
+    assert.equal(bulkJson.items.length, 2);
+    const preservedPublished = bulkJson.items.find((item: any) => item.id === ids[0]);
+    assert.deepEqual(preservedPublished.translations.en.approved, JSON.parse(preservedBefore).en.approved,
+      "an approved locale without a draft is retained");
+    assert.equal(preservedPublished.translations.zhCN.approved.value.name, "手动修改");
+    for (const item of bulkJson.items) for (const locale of ["en", "zhCN"]) {
+      assert.equal(item.translations[locale].displayStatus, "APPROVED");
+      assert.equal(item.translations[locale].draft, undefined);
+    }
+    const publishedPublicItems = await (await fetch(`${baseUrl}?restaurantId=${restaurant._id}`)).json() as any[];
+    assert.deepEqual(publishedPublicItems.find((item) => item.id === ids[0]).translations, {
+      en: { name: "Reviewed English", description: "Keep this." }, zhCN: { name: "手动修改", description: "保留。" }
+    }, "public output contains approved values without private draft metadata");
+    const regeneratedLegacy = await fetch(`${baseUrl}/${preservedItem._id}/translations/draft`, {
+      method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: false })
+    });
+    assert.equal(regeneratedLegacy.status, 200);
+    const regeneratedLegacyJson = await regeneratedLegacy.json() as any;
+    assert.equal(regeneratedLegacyJson.translations.en.draft.value.name, "Grilled pork rice",
+      "explicit false retains single-item regeneration behavior");
+    assert.equal(regeneratedLegacyJson.translations.zhCN.approved.value.name, "手动修改",
+      "single-item regeneration still preserves published values");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     globalThis.fetch = originalFetch;
     if (previousApiKey === undefined) delete process.env.XKIRO_API_KEY;
     else process.env.XKIRO_API_KEY = previousApiKey;
+    if (previousDeepSeekApiKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = previousDeepSeekApiKey;
     await MenuItem.deleteMany({ restaurantId: { $in: [restaurant._id, otherRestaurant._id] } });
     await OwnerRestaurantQuotaLease.deleteMany({ _id: { $in: [ownerId, otherOwnerId] } });
     await Restaurant.deleteMany({ _id: { $in: [restaurant._id, otherRestaurant._id] } });

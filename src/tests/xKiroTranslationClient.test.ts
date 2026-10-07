@@ -88,13 +88,41 @@ async function testMalformedProviderEnvelopeIsRejected() {
 async function testProviderFailureUsesSafeError() {
   const client = createXKiroTranslationClient({
     apiKey: "test-only-key",
-    fetcher: async () => new Response(JSON.stringify({ error: { message: "credential test-only-key rejected" } }), { status: 503 })
+    fetcher: async () => new Response(JSON.stringify({ error: { message: "credential test-only-key rejected" } }), {
+      status: 402,
+      headers: { "retry-after": "17" }
+    })
   });
   await assert.rejects(client.complete(messages), (error: any) => {
     assert.equal(error.code, "XKIRO_UPSTREAM_ERROR");
     assert.equal(error.message.includes("test-only-key"), false);
+    assert.equal(error.upstreamStatus, 402);
+    assert.equal(error.retryAfterSeconds, 17);
     return true;
   });
+}
+
+async function testRetriesTransientUpstreamFailuresWithRetryAfter() {
+  let attempts = 0;
+  const waits: number[] = [];
+  const client = createXKiroTranslationClient({
+    apiKey: "test-only-key",
+    wait: async (milliseconds) => { waits.push(milliseconds); },
+    fetcher: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(JSON.stringify({ error: { code: "bad_gateway" } }), {
+          status: 502,
+          headers: { "retry-after": "0" }
+        });
+      }
+      return new Response(JSON.stringify(completion("{\"ok\":true}")), { status: 200 });
+    }
+  });
+
+  assert.equal(await client.complete(messages), "{\"ok\":true}");
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [0]);
 }
 
 async function testTimeoutAbortsTheRequest() {
@@ -119,6 +147,7 @@ await testMissingApiKeyFailsWithoutExposingCredential();
 await testUsesQwenDefaultAndAllowsEnvironmentOverride();
 await testMalformedProviderEnvelopeIsRejected();
 await testProviderFailureUsesSafeError();
+await testRetriesTransientUpstreamFailuresWithRetryAfter();
 await testTimeoutAbortsTheRequest();
 
 console.log("xKiro translation client tests passed");

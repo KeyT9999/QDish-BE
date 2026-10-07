@@ -24,6 +24,9 @@ import {
   InvalidTranslationInputError,
   InvalidTranslationOutputError
 } from "../services/menuTranslationService.js";
+import { XkiroTranslationClientError } from "../services/xKiroTranslationClient.js";
+import { DeepSeekTranslationClientError } from "../services/deepSeekTranslationClient.js";
+import { TranslationProviderFailoverError } from "../services/translationProviderFailover.js";
 import {
   filterApprovedTranslations,
   markMenuTranslationsStale,
@@ -47,7 +50,7 @@ function serializePublicMenuItem(item: any, foodAttributesEnabled: boolean) {
   return Object.keys(translations).length > 0 ? { ...publicItem, translations } : publicItem;
 }
 
-function sendTranslationError(res: import("express").Response, error: unknown) {
+export function sendTranslationError(res: import("express").Response, error: unknown) {
   const code = typeof error === "object" && error !== null && "code" in error
     ? String((error as { code: unknown }).code)
     : "";
@@ -61,7 +64,75 @@ function sendTranslationError(res: import("express").Response, error: unknown) {
   if (error instanceof InvalidTranslationOutputError) {
     return res.status(502).json({ message: "AI chưa trả về bản dịch hợp lệ. Hãy thử lại.", code });
   }
-  return res.status(502).json({ message: "Không thể tạo bản dịch lúc này. Hãy thử lại.", code: "TRANSLATION_PROVIDER_ERROR" });
+  if (error instanceof TranslationProviderFailoverError) {
+    const providerFailure = (provider: "xkiro" | "deepseek", failure: unknown) => {
+      if (failure instanceof XkiroTranslationClientError) {
+        return { provider, code: failure.code, upstreamStatus: failure.upstreamStatus };
+      }
+      if (failure instanceof DeepSeekTranslationClientError) {
+        return { provider, code: failure.code, upstreamStatus: failure.upstreamStatus };
+      }
+      if (failure instanceof InvalidTranslationOutputError) {
+        return { provider, code: failure.code };
+      }
+      return { provider, code: "UNKNOWN_PROVIDER_ERROR" };
+    };
+    console.error("[menu-translation] primary and fallback providers failed", {
+      requestId: res.locals.requestId,
+      primary: providerFailure("xkiro", error.primaryError),
+      fallback: providerFailure("deepseek", error.fallbackError)
+    });
+    return res.status(503).json({
+      message: "X-Kiro và DeepSeek hiện đều chưa thể dịch. Hãy thử lại sau.",
+      code: error.code
+    });
+  }
+  if (error instanceof XkiroTranslationClientError) {
+    console.error("[menu-translation] X-Kiro request failed", {
+      requestId: res.locals.requestId,
+      providerCode: error.code,
+      upstreamStatus: error.upstreamStatus,
+      retryAfterSeconds: error.retryAfterSeconds
+    });
+
+    if (error.code === "XKIRO_TIMEOUT") {
+      return res.status(504).json({ message: "Dịch vụ AI phản hồi quá lâu. Hãy thử lại.", code: "TRANSLATION_PROVIDER_TIMEOUT" });
+    }
+    if (error.code === "XKIRO_UPSTREAM_ERROR" && error.upstreamStatus === 429) {
+      if (error.retryAfterSeconds !== undefined) {
+        res.setHeader("Retry-After", String(Math.ceil(error.retryAfterSeconds)));
+      }
+      return res.status(429).json({
+        message: "X-Kiro đang giới hạn lượt dịch. Các món còn lại đã tạm dừng; hãy chờ rồi thử lại.",
+        code: "TRANSLATION_RATE_LIMITED",
+        retryAfterSeconds: error.retryAfterSeconds
+      });
+    }
+    if (error.code === "XKIRO_UPSTREAM_ERROR" && error.upstreamStatus === 402) {
+      return res.status(503).json({ message: "Tài khoản X-Kiro đã hết hạn mức sử dụng.", code: "TRANSLATION_PROVIDER_QUOTA" });
+    }
+    if (error.code === "XKIRO_UPSTREAM_ERROR" && [401, 403, 404].includes(error.upstreamStatus ?? 0)) {
+      return res.status(503).json({ message: "Kiểm tra quyền truy cập và model trong cấu hình X-Kiro.", code: "TRANSLATION_PROVIDER_CONFIGURATION" });
+    }
+    return res.status(503).json({ message: "Dịch vụ AI tạm thời không khả dụng. Hãy thử lại.", code: "TRANSLATION_PROVIDER_UNAVAILABLE" });
+  }
+  if (error instanceof DeepSeekTranslationClientError) {
+    console.error("[menu-translation] DeepSeek request failed", {
+      requestId: res.locals.requestId,
+      providerCode: error.code,
+      upstreamStatus: error.upstreamStatus
+    });
+    return res.status(503).json({ message: "Dịch vụ dự phòng DeepSeek hiện không khả dụng. Hãy thử lại.", code: "TRANSLATION_PROVIDER_UNAVAILABLE" });
+  }
+  console.error("[menu-translation] unexpected translation failure", {
+    requestId: res.locals.requestId,
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    errorCode: code || undefined
+  });
+  return res.status(500).json({
+    message: "Không thể xử lý bản dịch lúc này. Hãy thử lại.",
+    code: "TRANSLATION_DRAFT_FAILED"
+  });
 }
 
 function parseMenuTranslationLocale(value: string): "en" | "zhCN" | null {
@@ -305,6 +376,62 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   );
 });
 
+// Owner/admin: publish stored drafts after validating the complete selection.
+router.post("/translations/bulk-publish", ...restaurantAdminOnly, async (req: AuthRequest, res, next) => {
+  const restaurantId = req.auth?.restaurantId;
+  if (!restaurantId || !mongoose.isValidObjectId(restaurantId)) {
+    return res.status(403).json({ message: "Không xác định được nhà hàng đang quản lý" });
+  }
+  const body = req.body as unknown;
+  if (typeof body !== "object" || body === null || Array.isArray(body)
+    || Object.keys(body).some((key) => key !== "itemIds")) {
+    return res.status(400).json({ message: "Danh sách món ăn không hợp lệ" });
+  }
+  const { itemIds } = body as { itemIds?: unknown };
+  if (!Array.isArray(itemIds) || itemIds.length === 0
+    || itemIds.some((id) => typeof id !== "string" || !mongoose.isValidObjectId(id))) {
+    return res.status(400).json({ message: "Danh sách ID món ăn không hợp lệ" });
+  }
+  const normalizedIds = (itemIds as string[]).map((id) => new mongoose.Types.ObjectId(id).toHexString());
+  if (new Set(normalizedIds).size !== normalizedIds.length) {
+    return res.status(400).json({ message: "Danh sách ID món ăn bị trùng" });
+  }
+
+  try {
+    const items = await MenuItem.find({ _id: { $in: normalizedIds }, restaurantId });
+    if (items.length !== normalizedIds.length) {
+      return res.status(404).json({ message: "Không tìm thấy món ăn trong nhà hàng" });
+    }
+    const updates = items.map((item) => {
+      const translations = item.toObject().translations as MenuItemTranslations | undefined;
+      const updatedTranslations: MenuItemTranslations = { ...(translations ?? {}) };
+      for (const locale of ["en", "zhCN"] as const) {
+        const entry = translations?.[locale];
+        if (!entry?.draft && entry?.approved?.status !== "APPROVED") return null;
+        if (entry?.draft) {
+          updatedTranslations[locale] = { approved: { value: entry.draft.value, status: "APPROVED" } };
+        }
+      }
+      return { item, translations: updatedTranslations };
+    });
+    if (updates.some((update) => update === null)) {
+      return res.status(400).json({ message: "Món ăn chưa có đủ bản dịch để xuất bản", code: "INCOMPLETE_TRANSLATIONS" });
+    }
+    const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(restaurantId);
+    for (const update of updates) {
+      if (!update) continue;
+      update.item.translations = update.translations;
+      await update.item.save();
+    }
+    return res.json({
+      publishedCount: items.length,
+      items: items.map((item) => serializeManagedMenuItem(item.toObject(), foodAttributesEnabled))
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 // Owner/admin: generate drafts for both supported locales without replacing published text.
 router.post("/:id/translations/draft", ...restaurantAdminOnly, async (req: AuthRequest, res) => {
   const restaurantId = req.auth?.restaurantId;
@@ -315,28 +442,52 @@ router.post("/:id/translations/draft", ...restaurantAdminOnly, async (req: AuthR
     return res.status(400).json({ message: "ID món ăn không hợp lệ" });
   }
 
+  const preserveExisting = req.body?.preserveExisting;
+  if (preserveExisting !== undefined && typeof preserveExisting !== "boolean") {
+    return res.status(400).json({ message: "preserveExisting phải là giá trị boolean" });
+  }
+
   const item = await MenuItem.findOne({ _id: req.params.id, restaurantId });
   if (!item) return res.status(404).json({ message: "Không tìm thấy món ăn" });
 
+  let draft: Awaited<ReturnType<typeof generateMenuItemTranslationDraft>>;
   try {
-    const draft = await generateMenuItemTranslationDraft({
+    draft = await generateMenuItemTranslationDraft({
       name: item.name,
       description: item.description ?? "",
       category: item.category
     });
+  } catch (error) {
+    return sendTranslationError(res, error);
+  }
+
+  try {
     const currentTranslations = item.toObject().translations as MenuItemTranslations | undefined;
     const generatedAt = new Date();
-    item.translations = {
-      ...(currentTranslations ?? {}),
-      en: { ...(currentTranslations?.en ?? {}), draft: { value: draft.en, generatedAt } },
-      zhCN: { ...(currentTranslations?.zhCN ?? {}), draft: { value: draft.zhCN, generatedAt } }
-    };
+    const updatedTranslations: MenuItemTranslations = { ...(currentTranslations ?? {}) };
+    for (const locale of ["en", "zhCN"] as const) {
+      const entry = currentTranslations?.[locale];
+      if (preserveExisting === true && (entry?.draft || entry?.approved?.status === "APPROVED")) continue;
+      updatedTranslations[locale] = { ...(entry ?? {}), draft: { value: draft[locale], generatedAt } };
+    }
+    item.translations = updatedTranslations;
     await item.save();
 
     const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(restaurantId);
     return res.json(serializeManagedMenuItem(item.toObject(), foodAttributesEnabled));
   } catch (error) {
-    return sendTranslationError(res, error);
+    const errorCode = typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code: unknown }).code)
+      : undefined;
+    console.error("[menu-translation] draft persistence failed", {
+      requestId: res.locals.requestId,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      errorCode
+    });
+    return res.status(500).json({
+      message: "Không thể lưu bản nháp dịch lúc này. Hãy thử lại.",
+      code: "TRANSLATION_DRAFT_FAILED"
+    });
   }
 });
 
