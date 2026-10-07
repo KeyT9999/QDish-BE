@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 
 import { Ingredient } from "../models/Ingredient.js";
 import { MenuItem } from "../models/MenuItem.js";
-import { AuthRequest, requireAuth } from "../middleware/auth.js";
+import type { MenuItemTranslationValue, MenuItemTranslations } from "../models/MenuTranslation.js";
+import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import { NutritionService } from "../services/nutritionService.js";
 import { resolveAllergenInfoStatusUpdate } from "../services/allergenInfoStatusPolicy.js";
 import { resolveMenuAllergenReview } from "../services/menuAllergenReviewService.js";
@@ -18,8 +19,66 @@ import {
   isFoodAttributesEnabledForRestaurant,
   serializeMenuItemForFeatures
 } from "../services/foodAttributeEntitlementService.js";
+import {
+  generateMenuItemTranslationDraft,
+  InvalidTranslationInputError,
+  InvalidTranslationOutputError
+} from "../services/menuTranslationService.js";
+import {
+  filterApprovedTranslations,
+  markMenuTranslationsStale,
+  serializeManagedTranslations
+} from "../services/menuTranslationPolicy.js";
 
 const router = Router();
+const restaurantAdminOnly = [requireAuth, requireRole(["RESTAURANT_ADMIN"])];
+
+function serializeManagedMenuItem(item: any, foodAttributesEnabled: boolean) {
+  const serialized = serializeMenuItemForFeatures(item, foodAttributesEnabled);
+  const { translations: _privateTranslations, ...managementItem } = serialized;
+  const translations = serializeManagedTranslations(item.translations as MenuItemTranslations | undefined);
+  return Object.keys(translations).length > 0 ? { ...managementItem, translations } : managementItem;
+}
+
+function serializePublicMenuItem(item: any, foodAttributesEnabled: boolean) {
+  const serialized = serializeMenuItemForFeatures(item, foodAttributesEnabled);
+  const { translations: _privateTranslations, ...publicItem } = serialized;
+  const translations = filterApprovedTranslations(item.translations as MenuItemTranslations | undefined);
+  return Object.keys(translations).length > 0 ? { ...publicItem, translations } : publicItem;
+}
+
+function sendTranslationError(res: import("express").Response, error: unknown) {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code: unknown }).code)
+    : "";
+
+  if (error instanceof InvalidTranslationInputError) {
+    return res.status(400).json({ message: "Tên hoặc mô tả món ăn vượt quá giới hạn cho phép.", code });
+  }
+  if (code === "XKIRO_NOT_CONFIGURED") {
+    return res.status(503).json({ message: "Chức năng AI dịch chưa được cấu hình.", code: "TRANSLATION_PROVIDER_UNAVAILABLE" });
+  }
+  if (error instanceof InvalidTranslationOutputError) {
+    return res.status(502).json({ message: "AI chưa trả về bản dịch hợp lệ. Hãy thử lại.", code });
+  }
+  return res.status(502).json({ message: "Không thể tạo bản dịch lúc này. Hãy thử lại.", code: "TRANSLATION_PROVIDER_ERROR" });
+}
+
+function parseMenuTranslationLocale(value: string): "en" | "zhCN" | null {
+  if (value === "en") return "en";
+  if (value === "zh-CN") return "zhCN";
+  return null;
+}
+
+function parseMenuTranslationValue(body: unknown): MenuItemTranslationValue | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const payload = body as Record<string, unknown>;
+  if (typeof payload.name !== "string" || typeof payload.description !== "string") return null;
+  const name = payload.name.trim();
+  const description = payload.description.trim();
+  if (!name || name.length > 200 || description.length > 2000 || typeof payload.publish !== "boolean") return null;
+  return { name, description };
+}
 
 // A REVIEWED menu declaration can only be written through this evidence-backed route.
 router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) => {
@@ -96,12 +155,24 @@ router.post("/:id/allergen-review", requireAuth, async (req: AuthRequest, res) =
   return res.json(serializeMenuItemForFeatures(item.toObject(), foodAttributesEnabled));
 });
 
-// Public: lấy menu theo restaurantId (bắt buộc)
+// Restaurant management read: includes unavailable items and private translation review state.
+router.get("/manage", ...restaurantAdminOnly, async (req: AuthRequest, res) => {
+  const restaurantId = req.auth?.restaurantId;
+  if (!restaurantId || !mongoose.isValidObjectId(restaurantId)) {
+    return res.status(403).json({ message: "Không xác định được nhà hàng đang quản lý" });
+  }
+
+  const [items, foodAttributesEnabled] = await Promise.all([
+    MenuItem.find({ restaurantId }).sort({ createdAt: -1 }).lean(),
+    isFoodAttributesEnabledForRestaurant(restaurantId)
+  ]);
+
+  return res.json(items.map((item) => serializeManagedMenuItem(item, foodAttributesEnabled)));
+});
+
+// Public: only available items and approved translations are returned.
 router.get("/", async (req, res) => {
-  const { restaurantId, includeUnavailable } = req.query as { 
-    restaurantId?: string; 
-    includeUnavailable?: string;
-  };
+  const { restaurantId } = req.query as { restaurantId?: string };
 
   if (!restaurantId) {
     return res.status(400).json({ message: "Thiếu restaurantId" });
@@ -113,25 +184,18 @@ router.get("/", async (req, res) => {
       .json({ message: "restaurantId không hợp lệ", restaurantId });
   }
 
-  // Build query filter
-  const filter: any = { restaurantId };
-  
-  // Nếu không có includeUnavailable hoặc là false, chỉ lấy món available
-  // (Mặc định cho khách hàng chỉ thấy món available)
-  if (!includeUnavailable || includeUnavailable !== 'true') {
-    filter.available = true;
-  }
+  const filter = { restaurantId, available: true };
 
   const [items, foodAttributesEnabled] = await Promise.all([
     MenuItem.find(filter).sort({ createdAt: -1 }).lean(),
     isFoodAttributesEnabledForRestaurant(restaurantId)
   ]);
 
-  const itemsWithNutrition = items.map((item) =>
-    serializeMenuItemForFeatures(item, foodAttributesEnabled)
+  const publicItems = items.map((item) =>
+    serializePublicMenuItem(item, foodAttributesEnabled)
   );
 
-  res.json(itemsWithNutrition);
+  res.json(publicItems);
 });
 
 // Restaurant Admin: thêm món
@@ -241,6 +305,75 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
   );
 });
 
+// Owner/admin: generate drafts for both supported locales without replacing published text.
+router.post("/:id/translations/draft", ...restaurantAdminOnly, async (req: AuthRequest, res) => {
+  const restaurantId = req.auth?.restaurantId;
+  if (!restaurantId || !mongoose.isValidObjectId(restaurantId)) {
+    return res.status(403).json({ message: "Không xác định được nhà hàng đang quản lý" });
+  }
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: "ID món ăn không hợp lệ" });
+  }
+
+  const item = await MenuItem.findOne({ _id: req.params.id, restaurantId });
+  if (!item) return res.status(404).json({ message: "Không tìm thấy món ăn" });
+
+  try {
+    const draft = await generateMenuItemTranslationDraft({
+      name: item.name,
+      description: item.description ?? "",
+      category: item.category
+    });
+    const currentTranslations = item.toObject().translations as MenuItemTranslations | undefined;
+    const generatedAt = new Date();
+    item.translations = {
+      ...(currentTranslations ?? {}),
+      en: { ...(currentTranslations?.en ?? {}), draft: { value: draft.en, generatedAt } },
+      zhCN: { ...(currentTranslations?.zhCN ?? {}), draft: { value: draft.zhCN, generatedAt } }
+    };
+    await item.save();
+
+    const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(restaurantId);
+    return res.json(serializeManagedMenuItem(item.toObject(), foodAttributesEnabled));
+  } catch (error) {
+    return sendTranslationError(res, error);
+  }
+});
+
+// Owner/admin: edit a locale draft or explicitly publish the edited value.
+router.patch("/:id/translations/:locale", ...restaurantAdminOnly, async (req: AuthRequest, res) => {
+  const restaurantId = req.auth?.restaurantId;
+  if (!restaurantId || !mongoose.isValidObjectId(restaurantId)) {
+    return res.status(403).json({ message: "Không xác định được nhà hàng đang quản lý" });
+  }
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: "ID món ăn không hợp lệ" });
+  }
+  const locale = parseMenuTranslationLocale(req.params.locale);
+  if (!locale) return res.status(400).json({ message: "Ngôn ngữ bản dịch không hợp lệ" });
+  const value = parseMenuTranslationValue(req.body);
+  if (!value) return res.status(400).json({ message: "Tên và mô tả bản dịch không hợp lệ" });
+
+  const item = await MenuItem.findOne({ _id: req.params.id, restaurantId });
+  if (!item) return res.status(404).json({ message: "Không tìm thấy món ăn" });
+
+  const currentTranslations = item.toObject().translations as MenuItemTranslations | undefined;
+  const updatedTranslations: MenuItemTranslations = { ...(currentTranslations ?? {}) };
+  const entry = { ...(updatedTranslations[locale] ?? {}) };
+  if ((req.body as Record<string, unknown>).publish === true) {
+    entry.approved = { value, status: "APPROVED" };
+    delete entry.draft;
+  } else {
+    entry.draft = { value, generatedAt: new Date() };
+  }
+  updatedTranslations[locale] = entry;
+  item.translations = updatedTranslations;
+  await item.save();
+
+  const foodAttributesEnabled = await isFoodAttributesEnabledForRestaurant(restaurantId);
+  return res.json(serializeManagedMenuItem(item.toObject(), foodAttributesEnabled));
+});
+
 // Restaurant Admin: sửa món
 router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
   const restaurantId = req.auth?.restaurantId;
@@ -338,6 +471,18 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
         return res.status(404).json({ message: "Không tìm thấy nguyên liệu" });
       }
       throw error;
+    }
+  }
+
+  const sourceTextChanged = name !== undefined || description !== undefined;
+  if (sourceTextChanged) {
+    const current = await MenuItem.findOne({ _id: req.params.id, restaurantId })
+      .select("name description translations");
+    if (!current) return res.status(404).json({ message: "Không tìm thấy món ăn" });
+    const sourceChanged = (name !== undefined && name !== current.name)
+      || (description !== undefined && description !== current.description);
+    if (sourceChanged) {
+      update.translations = markMenuTranslationsStale(current.translations);
     }
   }
 

@@ -1,6 +1,7 @@
 import type {
   CategoryTranslations,
   LocaleTranslationMap,
+  ManagedLocaleTranslationMap,
   MenuItemTranslations,
   TranslationEntry
 } from "../models/MenuTranslation.js";
@@ -18,6 +19,25 @@ export function filterApprovedTranslations<T>(
   }
 
   return publicTranslations;
+}
+
+export function serializeManagedTranslations<T>(
+  translations?: LocaleTranslationMap<T>
+): ManagedLocaleTranslationMap<T> {
+  const managedTranslations: ManagedLocaleTranslationMap<T> = {};
+
+  for (const locale of ["en", "zhCN"] as const) {
+    const entry = translations?.[locale];
+    if (!entry?.approved && !entry?.draft) continue;
+
+    managedTranslations[locale] = {
+      ...(entry.approved ? { approved: entry.approved } : {}),
+      ...(entry.draft ? { draft: entry.draft } : {}),
+      displayStatus: entry.draft ? "DRAFT" : entry.approved!.status
+    };
+  }
+
+  return managedTranslations;
 }
 
 function markApprovedValuesStale<T>(

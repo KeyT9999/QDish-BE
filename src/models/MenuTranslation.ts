@@ -24,6 +24,11 @@ export interface TranslationEntry<T> {
   };
 }
 
+export interface ManagedTranslationEntry<T> extends TranslationEntry<T> {
+  displayStatus: TranslationDisplayStatus;
+}
+
 export type LocaleTranslationMap<T> = Partial<Record<MenuTranslationLocale, TranslationEntry<T>>>;
 export type MenuItemTranslations = LocaleTranslationMap<MenuItemTranslationValue>;
 export type CategoryTranslations = LocaleTranslationMap<CategoryTranslationValue>;
+export type ManagedLocaleTranslationMap<T> = Partial<Record<MenuTranslationLocale, ManagedTranslationEntry<T>>>;
