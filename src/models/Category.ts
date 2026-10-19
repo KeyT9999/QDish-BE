@@ -28,7 +28,10 @@ const CategoryTranslationEntrySchema = new Schema<TranslationEntry<CategoryTrans
 
 const CategoryTranslationsSchema = new Schema({
   en: { type: CategoryTranslationEntrySchema, default: undefined },
-  zhCN: { type: CategoryTranslationEntrySchema, default: undefined }
+  zhCN: { type: CategoryTranslationEntrySchema, default: undefined },
+  ru: { type: CategoryTranslationEntrySchema, default: undefined },
+  ko: { type: CategoryTranslationEntrySchema, default: undefined },
+  hiIN: { type: CategoryTranslationEntrySchema, default: undefined }
 }, { _id: false });
 
 const CategorySchema = new Schema<ICategory>(

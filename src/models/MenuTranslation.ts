@@ -1,4 +1,4 @@
-export const MENU_TRANSLATION_LOCALES = ["en", "zhCN"] as const;
+export const MENU_TRANSLATION_LOCALES = ["en", "zhCN", "ru", "ko", "hiIN"] as const;
 
 export type MenuTranslationLocale = typeof MENU_TRANSLATION_LOCALES[number];
 export type TranslationPublicationStatus = "APPROVED" | "STALE";

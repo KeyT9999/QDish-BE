@@ -86,10 +86,16 @@ async function run() {
       const request = JSON.parse(String(init?.body));
       const userContent = JSON.parse(request.messages[1].content);
       const content = userContent.task.includes("category")
-        ? JSON.stringify({ en: { name: "Main dishes" }, zhCN: { name: "主菜" } })
+        ? JSON.stringify({
+          en: { name: "Main dishes" }, zhCN: { name: "主菜" },
+          ru: { name: "Основные блюда" }, ko: { name: "메인 요리" }, hiIN: { name: "मुख्य व्यंजन" }
+        })
         : JSON.stringify({
           en: { name: "Grilled pork rice", description: "Served with steamed rice." },
-          zhCN: { name: "烤猪肉饭", description: "配米饭。" }
+          zhCN: { name: "烤猪肉饭", description: "配米饭。" },
+          ru: { name: "Рис со свининой на гриле", description: "Подается с рисом." },
+          ko: { name: "구운 돼지고기 덮밥", description: "밥과 함께 제공됩니다." },
+          hiIN: { name: "ग्रिल्ड पोर्क राइस", description: "चावल के साथ परोसा जाता है।" }
         });
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), { status: 200 });
     }
@@ -102,7 +108,10 @@ async function run() {
       return new Response(JSON.stringify({
         choices: [{ message: { content: JSON.stringify({
           en: { name: "DeepSeek English", description: "DeepSeek English description." },
-          zhCN: { name: "DeepSeek 中文", description: "DeepSeek 中文描述。" }
+          zhCN: { name: "DeepSeek 中文", description: "DeepSeek 中文描述。" },
+          ru: { name: "DeepSeek на русском", description: "Описание DeepSeek." },
+          ko: { name: "DeepSeek 한국어", description: "DeepSeek 설명." },
+          hiIN: { name: "DeepSeek हिंदी", description: "DeepSeek विवरण।" }
         }) }, finish_reason: "stop" }]
       }), { status: 200 });
     }
@@ -323,8 +332,16 @@ async function run() {
       method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: true })
     });
     assert.equal(preserveResponse.status, 200);
-    assert.equal(JSON.stringify((await MenuItem.findById(preservedItem._id).lean())!.translations), preservedBefore,
-      "preservation keeps approved English and hand-edited Chinese byte-for-byte");
+    const preservedAfter = (await MenuItem.findById(preservedItem._id).lean())!.translations as any;
+    const preservedBeforeValues = JSON.parse(preservedBefore);
+    assert.deepEqual(preservedAfter.en, preservedBeforeValues.en,
+      "preservation keeps approved English byte-for-byte");
+    assert.deepEqual(JSON.parse(JSON.stringify(preservedAfter.zhCN)), preservedBeforeValues.zhCN,
+      "preservation keeps the hand-edited Chinese draft byte-for-byte");
+    for (const locale of ["ru", "ko", "hiIN"]) {
+      assert.equal(preservedAfter[locale].draft.value.name.length > 0, true,
+        `preservation generates a draft for missing ${locale}`);
+    }
     const missingResponse = await fetch(`${baseUrl}/${missingItem._id}/translations/draft`, {
       method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: true })
     });
@@ -371,13 +388,17 @@ async function run() {
     assert.deepEqual(preservedPublished.translations.en.approved, JSON.parse(preservedBefore).en.approved,
       "an approved locale without a draft is retained");
     assert.equal(preservedPublished.translations.zhCN.approved.value.name, "手动修改");
-    for (const item of bulkJson.items) for (const locale of ["en", "zhCN"]) {
+    for (const item of bulkJson.items) for (const locale of ["en", "zhCN", "ru", "ko", "hiIN"]) {
       assert.equal(item.translations[locale].displayStatus, "APPROVED");
       assert.equal(item.translations[locale].draft, undefined);
     }
     const publishedPublicItems = await (await fetch(`${baseUrl}?restaurantId=${restaurant._id}`)).json() as any[];
     assert.deepEqual(publishedPublicItems.find((item) => item.id === ids[0]).translations, {
-      en: { name: "Reviewed English", description: "Keep this." }, zhCN: { name: "手动修改", description: "保留。" }
+      en: { name: "Reviewed English", description: "Keep this." },
+      zhCN: { name: "手动修改", description: "保留。" },
+      ru: { name: "Рис со свининой на гриле", description: "Подается с рисом." },
+      ko: { name: "구운 돼지고기 덮밥", description: "밥과 함께 제공됩니다." },
+      hiIN: { name: "ग्रिल्ड पोर्क राइस", description: "चावल के साथ परोसा जाता है।" }
     }, "public output contains approved values without private draft metadata");
     const regeneratedLegacy = await fetch(`${baseUrl}/${preservedItem._id}/translations/draft`, {
       method: "POST", headers: headers(ownerToken), body: JSON.stringify({ preserveExisting: false })

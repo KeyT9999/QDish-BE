@@ -68,13 +68,23 @@ async function run() {
     assert.equal((await User.findById(owner._id).select("preferredLanguage"))?.preferredLanguage, UserLanguage.EN,
       "the account preference is persisted");
 
+    for (const preferredLanguage of ["ru", "ko", "hi-IN"]) {
+      const localizedPreference = await fetch(endpoint, {
+        method: "PATCH",
+        headers: headers(ownerToken),
+        body: JSON.stringify({ preferredLanguage })
+      });
+      assert.equal(localizedPreference.status, 200, `${preferredLanguage} is a supported owner-console language`);
+      assert.deepEqual(await localizedPreference.json(), { preferredLanguage });
+    }
+
     const invalidLanguage = await fetch(endpoint, {
       method: "PATCH",
       headers: headers(ownerToken),
       body: JSON.stringify({ preferredLanguage: "fr" })
     });
     assert.equal(invalidLanguage.status, 400, "unsupported locales are rejected");
-    assert.equal((await User.findById(owner._id).select("preferredLanguage"))?.preferredLanguage, UserLanguage.EN,
+    assert.equal((await User.findById(owner._id).select("preferredLanguage"))?.preferredLanguage, "hi-IN",
       "invalid locales do not mutate the saved preference");
 
     const ignoredTargetId = await fetch(endpoint, {

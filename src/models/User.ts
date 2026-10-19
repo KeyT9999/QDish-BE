@@ -10,7 +10,10 @@ export enum UserRole {
 export enum UserLanguage {
   VI = "vi",
   EN = "en",
-  ZH_CN = "zh-CN"
+  ZH_CN = "zh-CN",
+  RU = "ru",
+  KO = "ko",
+  HI_IN = "hi-IN"
 }
 
 export interface IUser extends Document {

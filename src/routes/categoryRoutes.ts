@@ -2,7 +2,7 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { Category } from "../models/Category.js";
 import { MenuItem } from "../models/MenuItem.js";
-import type { CategoryTranslationValue, CategoryTranslations } from "../models/MenuTranslation.js";
+import { MENU_TRANSLATION_LOCALES, type CategoryTranslationValue, type CategoryTranslations, type MenuTranslationLocale } from "../models/MenuTranslation.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import { generateCategoryTranslationDraft, InvalidTranslationInputError, InvalidTranslationOutputError } from "../services/menuTranslationService.js";
 import { filterApprovedTranslations, markCategoryTranslationsStale, serializeManagedTranslations } from "../services/menuTranslationPolicy.js";
@@ -10,9 +10,12 @@ import { filterApprovedTranslations, markCategoryTranslationsStale, serializeMan
 const router = Router();
 const restaurantAdminOnly = [requireAuth, requireRole(["RESTAURANT_ADMIN"])];
 
-function parseCategoryTranslationLocale(value: string): "en" | "zhCN" | null {
+function parseCategoryTranslationLocale(value: string): MenuTranslationLocale | null {
   if (value === "en") return "en";
   if (value === "zh-CN") return "zhCN";
+  if (value === "ru") return "ru";
+  if (value === "ko") return "ko";
+  if (value === "hi-IN") return "hiIN";
   return null;
 }
 
@@ -120,11 +123,14 @@ router.post("/:id/translations/draft", ...restaurantAdminOnly, async (req: AuthR
     const draft = await generateCategoryTranslationDraft({ name: category.name });
     const currentTranslations = category.toObject().translations as CategoryTranslations | undefined;
     const generatedAt = new Date();
-    category.translations = {
-      ...(currentTranslations ?? {}),
-      en: { ...(currentTranslations?.en ?? {}), draft: { value: draft.en, generatedAt } },
-      zhCN: { ...(currentTranslations?.zhCN ?? {}), draft: { value: draft.zhCN, generatedAt } }
-    };
+    const updatedTranslations: CategoryTranslations = { ...(currentTranslations ?? {}) };
+    for (const locale of MENU_TRANSLATION_LOCALES) {
+      updatedTranslations[locale] = {
+        ...(currentTranslations?.[locale] ?? {}),
+        draft: { value: draft[locale], generatedAt }
+      };
+    }
+    category.translations = updatedTranslations;
     await category.save();
     return res.json(serializeManagedCategory(category.toObject()));
   } catch (error) {
