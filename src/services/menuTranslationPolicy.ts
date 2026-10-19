@@ -5,13 +5,14 @@ import type {
   MenuItemTranslations,
   TranslationEntry
 } from "../models/MenuTranslation.js";
+import { MENU_TRANSLATION_LOCALES } from "../models/MenuTranslation.js";
 
 export function filterApprovedTranslations<T>(
   translations?: LocaleTranslationMap<T>
-): Partial<Record<"en" | "zhCN", T>> {
-  const publicTranslations: Partial<Record<"en" | "zhCN", T>> = {};
+): Partial<Record<(typeof MENU_TRANSLATION_LOCALES)[number], T>> {
+  const publicTranslations: Partial<Record<(typeof MENU_TRANSLATION_LOCALES)[number], T>> = {};
 
-  for (const locale of ["en", "zhCN"] as const) {
+  for (const locale of MENU_TRANSLATION_LOCALES) {
     const approved = translations?.[locale]?.approved;
     if (approved?.status === "APPROVED") {
       publicTranslations[locale] = approved.value;
@@ -26,7 +27,7 @@ export function serializeManagedTranslations<T>(
 ): ManagedLocaleTranslationMap<T> {
   const managedTranslations: ManagedLocaleTranslationMap<T> = {};
 
-  for (const locale of ["en", "zhCN"] as const) {
+  for (const locale of MENU_TRANSLATION_LOCALES) {
     const entry = translations?.[locale];
     if (!entry?.approved && !entry?.draft) continue;
 
@@ -45,7 +46,7 @@ function markApprovedValuesStale<T>(
 ): LocaleTranslationMap<T> {
   const staleTranslations: LocaleTranslationMap<T> = {};
 
-  for (const locale of ["en", "zhCN"] as const) {
+  for (const locale of MENU_TRANSLATION_LOCALES) {
     const approved = translations?.[locale]?.approved;
     if (!approved) continue;
 

@@ -55,7 +55,13 @@ async function run() {
     if (String(input) === "https://api.xkiro.com/v1/chat/completions") {
       return new Response(JSON.stringify({
         choices: [{
-          message: { content: JSON.stringify({ en: { name: "Main course" }, zhCN: { name: "主菜" } }) },
+          message: { content: JSON.stringify({
+            en: { name: "Main course" },
+            zhCN: { name: "主菜" },
+            ru: { name: "Основное блюдо" },
+            ko: { name: "메인 요리" },
+            hiIN: { name: "मुख्य व्यंजन" }
+          }) },
           finish_reason: "stop"
         }]
       }), { status: 200 });
@@ -110,6 +116,9 @@ async function run() {
     const generatedJson = await generated.json() as any;
     assert.equal(generatedJson.translations.en.approved.value.name, "Main dishes");
     assert.equal(generatedJson.translations.en.draft.value.name, "Main course");
+    assert.equal(generatedJson.translations.ru.draft.value.name, "Основное блюдо");
+    assert.equal(generatedJson.translations.ko.draft.value.name, "메인 요리");
+    assert.equal(generatedJson.translations.hiIN.draft.value.name, "मुख्य व्यंजन");
 
     const wrongRestaurant = await fetch(`${baseUrl}/${new mongoose.Types.ObjectId()}/translations/draft`, {
       method: "POST",

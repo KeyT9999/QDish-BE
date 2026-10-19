@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 
 import { Ingredient } from "../models/Ingredient.js";
 import { MenuItem } from "../models/MenuItem.js";
-import type { MenuItemTranslationValue, MenuItemTranslations } from "../models/MenuTranslation.js";
+import { MENU_TRANSLATION_LOCALES, type MenuItemTranslationValue, type MenuItemTranslations, type MenuTranslationLocale } from "../models/MenuTranslation.js";
 import { AuthRequest, requireAuth, requireRole } from "../middleware/auth.js";
 import { NutritionService } from "../services/nutritionService.js";
 import { resolveAllergenInfoStatusUpdate } from "../services/allergenInfoStatusPolicy.js";
@@ -135,9 +135,12 @@ export function sendTranslationError(res: import("express").Response, error: unk
   });
 }
 
-function parseMenuTranslationLocale(value: string): "en" | "zhCN" | null {
+function parseMenuTranslationLocale(value: string): MenuTranslationLocale | null {
   if (value === "en") return "en";
   if (value === "zh-CN") return "zhCN";
+  if (value === "ru") return "ru";
+  if (value === "ko") return "ko";
+  if (value === "hi-IN") return "hiIN";
   return null;
 }
 
@@ -405,7 +408,7 @@ router.post("/translations/bulk-publish", ...restaurantAdminOnly, async (req: Au
     const updates = items.map((item) => {
       const translations = item.toObject().translations as MenuItemTranslations | undefined;
       const updatedTranslations: MenuItemTranslations = { ...(translations ?? {}) };
-      for (const locale of ["en", "zhCN"] as const) {
+      for (const locale of MENU_TRANSLATION_LOCALES) {
         const entry = translations?.[locale];
         if (!entry?.draft && entry?.approved?.status !== "APPROVED") return null;
         if (entry?.draft) {
@@ -465,7 +468,7 @@ router.post("/:id/translations/draft", ...restaurantAdminOnly, async (req: AuthR
     const currentTranslations = item.toObject().translations as MenuItemTranslations | undefined;
     const generatedAt = new Date();
     const updatedTranslations: MenuItemTranslations = { ...(currentTranslations ?? {}) };
-    for (const locale of ["en", "zhCN"] as const) {
+    for (const locale of MENU_TRANSLATION_LOCALES) {
       const entry = currentTranslations?.[locale];
       if (preserveExisting === true && (entry?.draft || entry?.approved?.status === "APPROVED")) continue;
       updatedTranslations[locale] = { ...(entry ?? {}), draft: { value: draft[locale], generatedAt } };

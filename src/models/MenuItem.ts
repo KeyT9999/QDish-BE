@@ -96,7 +96,10 @@ const MenuItemTranslationEntrySchema = new Schema<TranslationEntry<MenuItemTrans
 
 const MenuItemTranslationsSchema = new Schema({
   en: { type: MenuItemTranslationEntrySchema, default: undefined },
-  zhCN: { type: MenuItemTranslationEntrySchema, default: undefined }
+  zhCN: { type: MenuItemTranslationEntrySchema, default: undefined },
+  ru: { type: MenuItemTranslationEntrySchema, default: undefined },
+  ko: { type: MenuItemTranslationEntrySchema, default: undefined },
+  hiIN: { type: MenuItemTranslationEntrySchema, default: undefined }
 }, { _id: false });
 
 const MenuItemSchema = new Schema<IMenuItem>(
